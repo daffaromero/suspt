@@ -5,6 +5,7 @@ package main
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -41,7 +42,29 @@ CREATE TABLE IF NOT EXISTS facts (
 	fy INTEGER, fp TEXT, form TEXT, filed TEXT, accn TEXT, frame TEXT
 );
 CREATE INDEX IF NOT EXISTS facts_lookup ON facts (cik, concept, end);
+CREATE TABLE IF NOT EXISTS business_reviews (
+	ticker TEXT PRIMARY KEY,
+	verdict TEXT NOT NULL CHECK (verdict IN ('ok', 'excluded')),
+	nonpermissible_revenue REAL NOT NULL DEFAULT 0, -- fraction of revenue
+	note TEXT,
+	reviewed_on TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS screens (
+	ticker TEXT NOT NULL,
+	as_of TEXT NOT NULL,
+	status TEXT NOT NULL,
+	business TEXT NOT NULL,
+	debt_ratio REAL, cash_ratio REAL, npi_ratio REAL, purification_ratio REAL,
+	streak INTEGER NOT NULL,
+	note TEXT,
+	PRIMARY KEY (ticker, as_of)
+);
 `
+
+const usage = `usage:
+  suspt ingest TICKER...                          fetch prices (Tiingo) and fundamentals (SEC EDGAR)
+  suspt screen [TICKER...]                        run the S&P Shariah screen (default: all ingested companies)
+  suspt review TICKER ok|excluded [PCT] [NOTE...] record a business-activity verdict; PCT = non-permissible revenue %`
 
 var httpClient = &http.Client{Timeout: time.Minute}
 
@@ -70,10 +93,9 @@ func mustEnv(name string) string {
 
 func main() {
 	log.SetFlags(0)
-	if len(os.Args) < 3 || os.Args[1] != "ingest" {
-		log.Fatal("usage: suspt ingest TICKER...")
+	if len(os.Args) < 2 {
+		log.Fatal(usage)
 	}
-	tiingoKey, secUA := mustEnv("TIINGO_API_KEY"), mustEnv("SEC_USER_AGENT")
 	dbPath := os.Getenv("SUSPT_DB")
 	if dbPath == "" {
 		dbPath = "data/suspt.db"
@@ -84,8 +106,30 @@ func main() {
 	}
 	defer db.Close()
 
+	args := os.Args[2:]
+	switch os.Args[1] {
+	case "ingest":
+		err = runIngest(db, args)
+	case "screen":
+		err = runScreen(db, args)
+	case "review":
+		err = runReview(db, args)
+	default:
+		err = errors.New(usage)
+	}
+	if err != nil {
+		log.Print(err)
+		os.Exit(1)
+	}
+}
+
+func runIngest(db *sql.DB, tickers []string) error {
+	if len(tickers) == 0 {
+		return errors.New(usage)
+	}
+	tiingoKey, secUA := mustEnv("TIINGO_API_KEY"), mustEnv("SEC_USER_AGENT")
 	failed := 0
-	for _, t := range os.Args[2:] {
+	for _, t := range tickers {
 		t = strings.ToUpper(t)
 		if n, err := ingestPrices(db, tiingoKey, t); err != nil {
 			log.Printf("%s prices: %v", t, err)
@@ -103,6 +147,7 @@ func main() {
 		}
 	}
 	if failed > 0 {
-		os.Exit(1)
+		return fmt.Errorf("%d ingest step(s) failed", failed)
 	}
+	return nil
 }
