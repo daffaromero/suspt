@@ -19,8 +19,9 @@ import (
 
 // app holds what the web UI needs beyond the database: the background refresh job.
 type app struct {
-	db     *sql.DB
-	dbPath string
+	db      *sql.DB
+	dbPath  string
+	version string // changes on every start, so open tabs know to reload
 
 	mu          sync.Mutex
 	job         jobStatus
@@ -150,7 +151,7 @@ func (a *app) status() map[string]any {
 	_, _, keyErr := apiKeys()
 	var asOf string
 	a.db.QueryRow(`SELECT COALESCE(MAX(date), '') FROM equity`).Scan(&asOf)
-	return map[string]any{"job": job, "stale": stale, "pending": pending, "watching": watching, "keys": keyErr == nil, "asOf": asOf}
+	return map[string]any{"job": job, "stale": stale, "pending": pending, "watching": watching, "keys": keyErr == nil, "asOf": asOf, "version": a.version}
 }
 
 /* write endpoints */

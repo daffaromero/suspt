@@ -14,8 +14,10 @@ import (
 	"regexp"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
+	"time"
 )
 
 //go:embed web
@@ -391,7 +393,7 @@ func runServe(db *sql.DB, dbPath string, args []string, open bool) error {
 	if err := replay(db); err != nil {
 		log.Printf("replay: %v", err)
 	}
-	a := &app{db: db, dbPath: dbPath}
+	a := &app{db: db, dbPath: dbPath, version: strconv.FormatInt(time.Now().UnixNano(), 36)}
 	go a.autoRefresh()
 	log.Printf("suspt is running at %s (keep this window open; close it to stop)", url)
 	if open {

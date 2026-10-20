@@ -677,6 +677,10 @@ async function pollStatus(once) {
   try {
     const s = await get('/api/status');
     const was = state.status?.job?.running;
+    // The app was restarted (usually an update): this tab's script may be stale, so reload,
+    // but never under an open order ticket.
+    if (state.version && s.version && s.version !== state.version && !$('#trade').open) { location.reload(); return; }
+    state.version = state.version || s.version;
     state.status = s;
     state.keys = s.keys;
     const el = $('#status');
