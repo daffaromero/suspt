@@ -570,6 +570,7 @@ async function openTrade(ticker, side) {
       $('#trade-err').textContent = err.message;
     }
   });
+  if (typeof dlg.showModal !== 'function') throw new Error('this browser is too old for the order ticket; please update it');
   dlg.showModal();
   f.amount.focus();
 }
@@ -592,7 +593,15 @@ document.addEventListener('click', (e) => {
   const { act, ticker, side, name, id, to, cond, verdict } = b.dataset;
   switch (act) {
     case 'go': location.hash = to; break;
-    case 'trade': openTrade(ticker, side).catch((err) => toast(err.message, 'err')); break;
+    case 'trade': {
+      const text = b.textContent;
+      b.disabled = true;
+      b.textContent = 'opening…';
+      openTrade(ticker, side)
+        .catch((err) => toast(`Couldn't open the order ticket: ${err.message}`, 'err'))
+        .finally(() => { b.disabled = false; b.textContent = text; });
+      break;
+    }
     case 'unwatch': if (confirm(`Remove ${ticker} from your watchlist?`)) run(() => send('DELETE', `/api/watchlist/${encodeURIComponent(ticker)}`), `${ticker} removed`); break;
     case 'rm-level': run(() => send('DELETE', `/api/levels/${encodeURIComponent(ticker)}/${encodeURIComponent(name)}`), 'Level removed'); break;
     case 'cancel': if (confirm(`Cancel order #${id}?`)) run(() => send('POST', `/api/orders/${id}/cancel`), `Order #${id} cancelled`); break;
