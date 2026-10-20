@@ -54,6 +54,9 @@ var errBusy = errors.New("a refresh is already running")
 // startRefresh runs refresh in the background. The file lock also keeps a terminal
 // `suspt update` and the app from fetching at the same time.
 func (a *app) startRefresh(trigger string) error {
+	if _, _, err := apiKeys(); err != nil {
+		return errors.New("connect the data sources first (Settings, data sources): nothing can be fetched without them")
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.job.Running {
