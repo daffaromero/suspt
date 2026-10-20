@@ -364,6 +364,54 @@ func addWatch(db *sql.DB, tickers []string) (int, error) {
 	return added, nil
 }
 
+// setStar puts tickers on or off the shortlist (adding them to the watchlist if needed).
+func setStar(db *sql.DB, tickers []string, on bool) error {
+	if on {
+		if _, err := addWatch(db, tickers); err != nil {
+			return err
+		}
+	}
+	for _, t := range tickers {
+		if _, err := db.Exec(`UPDATE watchlist SET starred = ? WHERE ticker = ?`, on, strings.ToUpper(strings.TrimSpace(t))); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// shortlistTop stars the n largest SPUS holdings by weight, a familiar set to learn with.
+func shortlistTop(db *sql.DB, n int) ([]string, error) {
+	rs, err := db.Query(`SELECT ticker FROM index_members WHERE fund = 'SPUS' ORDER BY weight DESC LIMIT ?`, n)
+	if err != nil {
+		return nil, err
+	}
+	var top []string
+	for rs.Next() {
+		var t string
+		rs.Scan(&t)
+		top = append(top, t)
+	}
+	rs.Close()
+	if len(top) == 0 {
+		return nil, errors.New("the SPUS holdings list isn't loaded yet: add all SPUS stocks first, or star stocks yourself")
+	}
+	return top, setStar(db, top, true)
+}
+
+func runStar(db *sql.DB, args []string, on bool) error {
+	if len(args) == 0 {
+		return errors.New("usage: suspt star|unstar TICKER...   (suspt star top10 stars the 10 largest SPUS holdings)")
+	}
+	if on && len(args) == 1 && args[0] == "top10" {
+		top, err := shortlistTop(db, 10)
+		if err == nil {
+			fmt.Println("shortlist:", strings.Join(top, " "))
+		}
+		return err
+	}
+	return setStar(db, args, on)
+}
+
 func runUnwatch(db *sql.DB, args []string) error {
 	for _, t := range args {
 		if _, err := db.Exec(`DELETE FROM watchlist WHERE ticker = ?`, strings.ToUpper(t)); err != nil {
@@ -419,6 +467,7 @@ type watchRow struct {
 	Status  string      `json:"status"`
 	Sector  string      `json:"sector"`
 	Held    bool        `json:"held"`
+	Starred bool        `json:"starred"`
 	Levels  []levelDist `json:"levels"`
 	Signals []signal    `json:"signals"`
 }
@@ -531,6 +580,7 @@ func watchlistRows(db *sql.DB) ([]watchRow, error) {
 			return nil, err
 		}
 		r := watchRow{Ticker: t, Status: tickerStatus(db, set, t), Sector: sectorOf(db, set, t), Levels: []levelDist{}, Signals: []signal{}}
+		db.QueryRow(`SELECT starred FROM watchlist WHERE ticker = ?`, t).Scan(&r.Starred)
 		if s := adjustedSeries(bars); len(s.Close) > 0 {
 			i := len(s.Close) - 1
 			r.Date, r.Close = s.Dates[i], s.Close[i]
@@ -628,6 +678,26 @@ func refresh(db *sql.DB, step func(i, n int, ticker string)) error {
 	}
 	slices.Sort(tickers)
 	tickers = slices.Compact(tickers)
+	// Shortlisted and held stocks first, so they are current within minutes even when the
+	// free tier's hourly limit stretches a big watchlist over hours.
+	first := map[string]bool{}
+	if rs, err := db.Query(`SELECT ticker FROM watchlist WHERE starred = 1 UNION SELECT ticker FROM lots WHERE open_qty > 0`); err == nil {
+		for rs.Next() {
+			var t string
+			rs.Scan(&t)
+			first[t] = true
+		}
+		rs.Close()
+	}
+	slices.SortStableFunc(tickers, func(a, b string) int {
+		switch {
+		case first[a] && !first[b]:
+			return -1
+		case first[b] && !first[a]:
+			return 1
+		}
+		return 0
+	})
 	if len(tickers) > 45 {
 		log.Printf("warning: %d tickers; Tiingo's free tier allows 50 requests per hour", len(tickers))
 	}

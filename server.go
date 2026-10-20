@@ -345,6 +345,20 @@ func newServer(a *app) http.Handler {
 		}
 		return map[string]int{"added": n}, err
 	})
+	act("POST /api/watchlist/star", func(db *sql.DB, r *http.Request) (any, error) {
+		var in struct {
+			Tickers []string
+			On      bool
+		}
+		if err := decode(r, &in); err != nil {
+			return nil, err
+		}
+		return ok(setStar(db, in.Tickers, in.On))
+	})
+	act("POST /api/watchlist/shortlist-top", realOnly(func(*http.Request) (any, error) {
+		top, err := shortlistTop(a.db, 10)
+		return map[string]any{"tickers": top}, err
+	}))
 	act("DELETE /api/watchlist/{t}", func(db *sql.DB, r *http.Request) (any, error) {
 		_, err := db.Exec(`DELETE FROM watchlist WHERE ticker = ?`, strings.ToUpper(r.PathValue("t")))
 		return ok(err)

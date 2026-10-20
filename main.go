@@ -133,6 +133,7 @@ const usage = `usage:
   suspt sync-spus                                 refresh SPUS (S&P 500 Shariah) holdings and add them to the watchlist
   suspt watch [TICKER...]                         show the watchlist, or add tickers
   suspt unwatch TICKER...
+  suspt star|unstar TICKER...                     shortlist stocks to focus on (star top10: the 10 largest SPUS holdings)
   suspt level TICKER NAME PRICE|rm                set a key level (usable in rules as level:NAME)
   suspt rule add NAME TICKER|* BUY|WATCH THESIS "CONDITION"   e.g. "close crosses_above sma200 and chg > 1"
   suspt rule rm NAME
@@ -176,6 +177,10 @@ func openDB(path string) (*sql.DB, error) {
 			db.Close()
 			return nil, err
 		}
+	}
+	if _, err := db.Exec(`ALTER TABLE watchlist ADD COLUMN starred INTEGER NOT NULL DEFAULT 0`); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+		db.Close()
+		return nil, err
 	}
 	return db, nil
 }
@@ -277,6 +282,8 @@ func main() {
 		err = runWatch(db, args)
 	case "unwatch":
 		err = runUnwatch(db, args)
+	case "star", "unstar":
+		err = runStar(db, args, os.Args[1] == "star")
 	case "level":
 		err = runLevel(db, args)
 	case "rule":

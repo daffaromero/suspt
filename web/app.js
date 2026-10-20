@@ -235,6 +235,20 @@ const fetchNote = (n) => (inPractice() ? `${n} added.` : state.keys === false
   ? `${n} added. ${NO_KEYS} Connect them in Settings.`
   : `${n} added. Their data arrives in the background.`);
 
+// The watchlist opens on the shortlist (starred stocks) when there is one: 218 stocks is a
+// lot to learn from. The chosen tab is remembered per account.
+const LIST_TABS = ['shortlist', 'held', 'all'];
+function listTab(rows) {
+  let saved = '';
+  try { saved = localStorage.getItem(`suspt-list-${mode}`) || ''; } catch { /* storage blocked */ }
+  if (LIST_TABS.includes(saved)) return saved;
+  return rows.some((r) => r.starred) ? 'shortlist' : 'all';
+}
+function setListTab(tab) {
+  state.list = tab;
+  try { localStorage.setItem(`suspt-list-${mode}`, tab); } catch { /* storage blocked */ }
+}
+
 async function viewWatchlist(main, ticker) {
   const [rows, st] = await Promise.all([get('/api/watchlist'), get('/api/status')]);
   state.data.watch = rows;
@@ -246,10 +260,12 @@ async function viewWatchlist(main, ticker) {
       ${addForm}<p>${btn('sync-spus', 'Add all SPUS stocks', '', 'primary')}</p></div>`;
     return;
   }
+  state.list = listTab(rows);
   // The selection is a ticker, never a list position: positions shift when the filter changes.
   if (ticker && rows.some((r) => r.ticker === ticker)) {
     state.sel = ticker;
     if (!visibleRows().some((r) => r.ticker === ticker)) state.filter = ''; // a link must show what it names
+    if (!visibleRows().some((r) => r.ticker === ticker)) state.list = 'all';
   } else if (!rows.some((r) => r.ticker === state.sel && r.date)) {
     state.sel = (rows.find((r) => r.date) || rows[0]).ticker; // start on a ticker that has data
   }
@@ -259,7 +275,7 @@ async function viewWatchlist(main, ticker) {
       ? `<p class="fine">${pending} of ${rows.length} stocks are still waiting for prices. They fill in by themselves; the free price service allows 50 lookups an hour, so a big list takes a few hours the first time.</p>`
       : `<p class="flag">${pending} of ${rows.length} stocks have no prices. ${NO_KEYS} ${btn('go', 'Open settings', 'data-to="settings"', 'small primary')}</p>`}
     <div class="split">
-      <div class="list">${addForm}<input id="filter" placeholder="/ filter" aria-label="Filter watchlist" value="${esc(state.filter)}"><ul id="wl" role="listbox" aria-label="Watchlist"></ul></div>
+      <div class="list">${addForm}<div class="tabs" id="list-tabs" role="group" aria-label="Which stocks"></div><input id="filter" placeholder="/ filter" aria-label="Filter watchlist" value="${esc(state.filter)}"><ul id="wl" role="listbox" aria-label="Watchlist"></ul></div>
       <section id="detail" aria-live="polite"></section>
     </div>`;
   $('#filter').addEventListener('input', (e) => {
@@ -274,19 +290,29 @@ async function viewWatchlist(main, ticker) {
 
 function visibleRows() {
   const f = state.filter.trim().toUpperCase();
-  return (state.data.watch || []).filter((r) => !f || r.ticker.includes(f) || r.sector.toUpperCase().includes(f) || r.status.includes(f));
+  const tab = state.list || 'all';
+  return (state.data.watch || [])
+    .filter((r) => tab === 'all' || (tab === 'shortlist' ? r.starred : r.held))
+    .filter((r) => !f || r.ticker.includes(f) || r.sector.toUpperCase().includes(f) || r.status.includes(f));
 }
 
 function drawList() {
+  const all = state.data.watch || [];
+  const counts = { shortlist: all.filter((r) => r.starred).length, held: all.filter((r) => r.held).length, all: all.length };
+  $('#list-tabs').innerHTML = LIST_TABS.map((t) => `<button type="button" data-act="list-tab" data-tab="${t}" aria-pressed="${state.list === t}">${t === 'shortlist' ? '★ ' : ''}${t} <span class="muted">${counts[t]}</span></button>`).join('');
   const rows = visibleRows();
   if (rows.length && !rows.some((r) => r.ticker === state.sel)) state.sel = rows[0].ticker;
+  const none = state.list === 'shortlist' && !counts.shortlist
+    ? `<li class="empty" style="padding:12px">Nothing on your shortlist yet. Star the stocks you want to learn with${inPractice() ? '.' : `, or ${btn('shortlist-top', 'shortlist the 10 largest SPUS companies', '', 'small')}`}</li>`
+    : state.list === 'held' && !counts.held ? '<li class="empty" style="padding:12px">You don\'t hold anything yet.</li>'
+    : '<li class="empty" style="padding:12px">no match</li>';
   $('#wl').innerHTML = rows.map((r) => `<li><button role="option" aria-selected="${r.ticker === state.sel}" data-ticker="${esc(r.ticker)}">
-      <span class="t">${esc(r.ticker)}</span>${r.date
+      <span class="t">${r.starred ? '<span class="star" aria-label="on shortlist">★</span>' : ''}${esc(r.ticker)}</span>${r.date
         ? `<span class="px">${money(r.close)}</span><span class="chg ${dir(r.change)}">${pct(r.change, 2)}</span>`
         : '<span class="px muted">waiting</span><span></span>'}
       <span class="meta">${badge(r.status)}<span>${esc(r.sector)}${r.held ? ' · held' : ''}${r.signals.map((s) => ` · ${s.blocked ? 'blocked' : s.action.toLowerCase()} ${esc(s.rule)}`).join('')}</span></span>
-    </button></li>`).join('') || `<li class="empty" style="padding:12px">no match</li>`;
-  $('#wl').querySelectorAll('button').forEach((b) => (b.onclick = () => { state.sel = b.dataset.ticker; drawList(); showTicker(); }));
+    </button></li>`).join('') || none;
+  $('#wl').querySelectorAll('button[role=option]').forEach((b) => (b.onclick = () => { state.sel = b.dataset.ticker; drawList(); showTicker(); }));
 }
 
 function sma(bars, n) {
@@ -325,6 +351,7 @@ async function showTicker() {
       <span class="spacer"></span>
       ${btn('trade', 'Buy', `data-ticker="${esc(d.ticker)}" data-side="buy" ${canBuy ? '' : 'title="Only compliant stocks can be bought"'}`, 'primary')}
       ${d.held ? btn('trade', 'Sell', `data-ticker="${esc(d.ticker)}" data-side="sell"`) : ''}
+      ${btn('star', row.starred ? '★ on shortlist' : '☆ shortlist', `data-ticker="${esc(d.ticker)}" data-on="${!row.starred}" title="${row.starred ? 'Remove from' : 'Add to'} your shortlist (s)"`, row.starred ? 'starred' : '')}
       ${unwatch}</div>
     ${waitingOrders(orders.filter((o) => o.ticker === d.ticker))}
     <div class="panel">
@@ -554,6 +581,17 @@ async function viewSettings(main) {
     </div>`;
 }
 
+async function toggleStar(ticker, on) {
+  try {
+    await send('POST', '/api/watchlist/star', { tickers: [ticker], on });
+  } catch (e) { toast(e.message, 'err'); return; }
+  const row = (state.data.watch || []).find((r) => r.ticker === ticker);
+  if (row) row.starred = on;
+  toast(on ? `${ticker} is on your shortlist` : `${ticker} is off your shortlist`);
+  drawList();
+  showTicker();
+}
+
 /* practice: the time machine */
 const longDate = (d) => new Date(`${d}T12:00:00`).toLocaleDateString('en-US', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
 
@@ -746,7 +784,15 @@ document.addEventListener('click', (e) => {
     }
     case 'quick-review': run(() => send('POST', '/api/reviews', { ticker, verdict, percent: 0, note: '' }), `${ticker} marked ${verdict === 'ok' ? 'fine' : 'excluded'}`); break;
     case 'example': { const input = b.closest('form').condition; input.value = cond; input.focus(); break; }
-    case 'sync-spus': run(() => send('POST', '/api/sync-spus'), (r) => fetchNote(`${r.added} stocks`)).then(() => send('POST', '/api/refresh').catch(() => {})); break;
+    case 'sync-spus': run(async () => {
+      const r = await send('POST', '/api/sync-spus');
+      // A learner shouldn't land on 218 stocks: start them on the 10 largest unless they already chose some.
+      if (!(state.data.watch || []).some((w) => w.starred)) { await send('POST', '/api/watchlist/shortlist-top'); setListTab('shortlist'); }
+      return r;
+    }, (r) => `${fetchNote(`${r.added} stocks`)} The 10 largest are on your shortlist.`).then(() => send('POST', '/api/refresh').catch(() => {})); break;
+    case 'shortlist-top': run(async () => { await send('POST', '/api/watchlist/shortlist-top'); setListTab('shortlist'); }, 'The 10 largest SPUS companies are on your shortlist'); break;
+    case 'list-tab': setListTab(b.dataset.tab); { const before = state.sel; drawList(); if (state.sel !== before) showTicker(); } break;
+    case 'star': toggleStar(ticker, b.dataset.on === 'true'); break;
     case 'refresh': run(() => send('POST', '/api/refresh'), 'Fetching new data in the background'); break;
     case 'mode': setMode(to); state.practice = null; loadPractice().catch(() => {}); location.hash = to === 'practice' ? 'practice' : 'portfolio'; route(); pollStatus(true); break;
     case 'advance': advance(b.dataset.step); break;
@@ -824,7 +870,7 @@ const RENDER = { portfolio: viewPortfolio, watchlist: viewWatchlist, journal: vi
 function drawNav() {
   $('#nav').innerHTML = VIEWS.map((v, i) => `<a href="#${v}" ${v === state.view ? 'aria-current="page"' : ''} ${v === 'practice' ? 'class="nav-practice"' : ''}><span class="n">0${i + 1}</span>${v}</a>`).join('');
   $('#mode').innerHTML = ['real', 'practice'].map((m) => `<button type="button" data-act="mode" data-to="${m}" aria-pressed="${mode === m}">${m}</button>`).join('');
-  const listKeys = state.view === 'watchlist' ? '<span class="hint"><kbd>j/k</kbd>move</span><span class="hint"><kbd>b</kbd>buy</span><span class="hint"><kbd>h</kbd>rule hits</span>' : '';
+  const listKeys = state.view === 'watchlist' ? '<span class="hint"><kbd>j/k</kbd>move</span><span class="hint"><kbd>b</kbd>buy</span><span class="hint"><kbd>s</kbd>star</span><span class="hint"><kbd>h</kbd>rule hits</span>' : '';
   const filterKey = state.view === 'watchlist' || state.view === 'screen' ? '<span class="hint"><kbd>/</kbd>filter</span>' : '';
   $('#hints').innerHTML = VIEWS.map((v, i) => `<span class="hint opt"><kbd>${i + 1}</kbd>${v}</span>`).join('') + listKeys + filterKey +
     (inPractice() && state.practice?.active ? '<span class="hint"><kbd>n</kbd>next day</span><span class="hint"><kbd>w</kbd>week</span><span class="hint"><kbd>m</kbd>month</span>' : '') +
@@ -866,6 +912,11 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'r') { route(); return; }
   if (inPractice() && state.practice?.active && !state.practice.atToday && { n: 1, w: 1, m: 1 }[e.key]) { advance({ n: 'day', w: 'week', m: 'month' }[e.key]); return; }
   if (e.key === 'h' && state.view === 'watchlist') { state.hits = !state.hits; showTicker(); return; }
+  if (e.key === 's' && state.view === 'watchlist' && visibleRows().some((r) => r.ticker === state.sel)) {
+    const row = state.data.watch.find((r) => r.ticker === state.sel);
+    toggleStar(row.ticker, !row.starred);
+    return;
+  }
   if (e.key === 'b' && state.view === 'watchlist' && visibleRows().some((r) => r.ticker === state.sel)) { openTrade(state.sel, 'buy').catch((err) => toast(err.message, 'err')); return; }
   if (e.key === '/' && $('#filter')) { e.preventDefault(); $('#filter').focus(); return; }
   if (state.view === 'watchlist' && ['j', 'k', 'ArrowDown', 'ArrowUp'].includes(e.key)) {
