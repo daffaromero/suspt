@@ -9,6 +9,7 @@ if [ ! -x ./suspt ] || [ -n "$(find . \( -name '*.go' -o -path './web/*' \) -new
     exit 1
   fi
   echo "Building suspt (first run or after an update)..."
-  go build -o suspt . || { echo "Build failed; see above."; read -r _; exit 1; }
+  # Build to a temp file and swap it in, so a copy that is already running keeps working.
+  go build -o suspt.tmp . && mv -f suspt.tmp suspt || { echo "Build failed; see above."; read -r _; exit 1; }
 fi
 exec ./suspt
