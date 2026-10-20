@@ -679,7 +679,7 @@ async function viewHome(main) {
   state.keys = st.keys;
   if (m.asOf) store.set(`suspt-seen-${mode}`, m.asOf);
   const intro = inPractice() ? await practicePanel() : checklist(st, orders.length > 0);
-  if (intro && !inPractice()) ideas = ideas.filter((i) => i.kind !== 'start'); // getting started already says it
+  if (!m.tiles.length) ideas = ideas.filter((i) => i.kind !== 'start'); // the empty tiles panel already says it
   const since = seen[mode] && seen[mode] === m.since ? `since your last visit (${shortDate(m.since)})` : 'in the past week';
   main.innerHTML = `${intro}
     ${label('01', 'your stocks')}
