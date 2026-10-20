@@ -804,7 +804,7 @@ document.addEventListener('click', (e) => {
       return r;
     }, (r) => `${fetchNote(`${r.added} stocks`)} The 10 largest are on your shortlist.`).then(() => send('POST', '/api/refresh').catch(() => {})); break;
     case 'shortlist-top': run(async () => { await send('POST', '/api/watchlist/shortlist-top'); setListTab('shortlist'); }, 'The 10 largest SPUS companies are on your shortlist'); break;
-    case 'list-tab': setListTab(b.dataset.tab); { const before = state.sel; drawList(); if (state.sel !== before) showTicker(); } break;
+    case 'list-tab': setListTab(b.dataset.tab); drawList(); showTicker(); break; // an empty tab clears the stock page too
     case 'star': toggleStar(ticker, b.dataset.on === 'true'); break;
     case 'refresh': run(() => send('POST', '/api/refresh'), 'Fetching new data in the background'); break;
     case 'mode': setMode(to); state.practice = null; loadPractice().catch(() => {}); location.hash = to === 'practice' ? 'practice' : 'portfolio'; route(); pollStatus(true); break;
