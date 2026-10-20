@@ -217,9 +217,15 @@ async function viewPortfolio(main) {
   $('#flags').innerHTML = s.flags.map((f) => `<li>${esc(f)}</li>`).join('');
 }
 
+const NO_KEYS = 'The data sources aren\'t connected yet, so nothing can be fetched.';
+const fetchNote = (n) => (state.keys === false
+  ? `${n} added. ${NO_KEYS} Connect them in Settings.`
+  : `${n} added. Their data arrives in the background.`);
+
 async function viewWatchlist(main, ticker) {
-  const rows = await get('/api/watchlist');
+  const [rows, st] = await Promise.all([get('/api/watchlist'), get('/api/status')]);
   state.data.watch = rows;
+  state.keys = st.keys;
   const addForm = `<form class="addrow" data-form="add-watch"><input name="tickers" placeholder="add stocks, e.g. NVDA AAPL" aria-label="Add stocks by ticker" autocomplete="off"><button class="btn" type="submit">Add</button></form>`;
   if (!rows.length) {
     main.innerHTML = `${label('01', 'watchlist')}
@@ -236,7 +242,9 @@ async function viewWatchlist(main, ticker) {
   }
   const pending = rows.filter((r) => !r.date).length;
   main.innerHTML = `${label('01', 'watchlist')}
-    ${pending ? `<p class="fine">${pending} of ${rows.length} stocks are still waiting for prices. They fill in by themselves; the free price service allows 50 lookups an hour, so a big list takes a few hours the first time.</p>` : ''}
+    ${!pending ? '' : st.keys
+      ? `<p class="fine">${pending} of ${rows.length} stocks are still waiting for prices. They fill in by themselves; the free price service allows 50 lookups an hour, so a big list takes a few hours the first time.</p>`
+      : `<p class="flag">${pending} of ${rows.length} stocks have no prices. ${NO_KEYS} ${btn('go', 'Open settings', 'data-to="settings"', 'small primary')}</p>`}
     <div class="split">
       <div class="list">${addForm}<input id="filter" placeholder="/ filter" aria-label="Filter watchlist" value="${esc(state.filter)}"><ul id="wl" role="listbox" aria-label="Watchlist"></ul></div>
       <section id="detail" aria-live="polite"></section>
@@ -292,7 +300,7 @@ async function showTicker() {
   } catch (e) {
     $('#detail').innerHTML = `<div class="detail-head"><h1>${esc(row.ticker)}</h1>${badge(row.status)}<span class="spacer"></span>${unwatch}</div>` + (row.date
       ? `<p class="flag">${esc(e.message)}</p>`
-      : empty('No prices yet. They are fetched in the background; this page updates when they arrive.'));
+      : empty(state.keys === false ? `No prices yet. ${NO_KEYS} ${btn('go', 'Open settings', 'data-to="settings"', 'small')}` : 'No prices yet. They are fetched in the background; this page updates when they arrive.'));
     return;
   }
   const last = d.screens[d.screens.length - 1];
@@ -639,7 +647,7 @@ document.addEventListener('click', (e) => {
     }
     case 'quick-review': run(() => send('POST', '/api/reviews', { ticker, verdict, percent: 0, note: '' }), `${ticker} marked ${verdict === 'ok' ? 'fine' : 'excluded'}`); break;
     case 'example': { const input = b.closest('form').condition; input.value = cond; input.focus(); break; }
-    case 'sync-spus': run(() => send('POST', '/api/sync-spus'), (r) => `${r.added} stocks added. Their data fills in over the next few hours.`).then(() => send('POST', '/api/refresh').catch(() => {})); break;
+    case 'sync-spus': run(() => send('POST', '/api/sync-spus'), (r) => fetchNote(`${r.added} stocks`)).then(() => send('POST', '/api/refresh').catch(() => {})); break;
     case 'refresh': run(() => send('POST', '/api/refresh'), 'Fetching new data in the background'); break;
   }
 });
@@ -652,7 +660,7 @@ document.addEventListener('submit', (e) => {
   switch (f.dataset.form) {
     case 'add-watch': {
       const tickers = v('tickers').toUpperCase().split(/[\s,]+/).filter(Boolean);
-      if (tickers.length) run(() => send('POST', '/api/watchlist', { tickers }), (r) => `${r.added} added. Data arrives in the background.`).then(() => send('POST', '/api/refresh').catch(() => {}));
+      if (tickers.length) run(() => send('POST', '/api/watchlist', { tickers }), (r) => fetchNote(r.added)).then(() => send('POST', '/api/refresh').catch(() => {}));
       break;
     }
     case 'add-level': run(() => send('POST', '/api/levels', { ticker: f.dataset.ticker, name: v('name'), price: parseFloat(v('price')) }), 'Level saved'); break;
@@ -670,6 +678,7 @@ async function pollStatus(once) {
     const s = await get('/api/status');
     const was = state.status?.job?.running;
     state.status = s;
+    state.keys = s.keys;
     const el = $('#status');
     let text, cls = '';
     const wait = (s.job.message || '').match(/waiting until (\d\d:\d\d)/);
