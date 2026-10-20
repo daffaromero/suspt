@@ -338,6 +338,7 @@ async function showTicker() {
   const unwatch = btn('unwatch', 'Remove from watchlist', `data-ticker="${esc(row.ticker)}"`, 'quiet');
   let d, orders = [];
   try {
+    if (!row.date) throw new Error('no prices yet');
     [d, orders] = await Promise.all([get(`/api/ticker/${encodeURIComponent(row.ticker)}`), get('/api/orders')]);
   } catch (e) {
     $('#detail').innerHTML = `<div class="detail-head"><h1>${esc(row.ticker)}</h1>${badge(row.status)}<span class="spacer"></span>${unwatch}</div>` + (row.date
@@ -594,6 +595,10 @@ async function viewSettings(main) {
     </div>`;
 }
 
+// Ask the app to fetch new data, but only when it can: practice has no fetching and a
+// fresh install has no keys yet, and asking anyway just logs refused requests.
+const kick = () => (inPractice() || state.keys === false ? Promise.resolve() : send('POST', '/api/refresh').catch(() => {}));
+
 async function toggleStar(ticker, on) {
   try {
     await send('POST', '/api/watchlist/star', { tickers: [ticker], on });
@@ -802,7 +807,7 @@ document.addEventListener('click', (e) => {
       // A learner shouldn't land on 218 stocks: start them on the 10 largest unless they already chose some.
       if (!(state.data.watch || []).some((w) => w.starred)) { await send('POST', '/api/watchlist/shortlist-top'); setListTab('shortlist'); }
       return r;
-    }, (r) => `${fetchNote(`${r.added} stocks`)} The 10 largest are on your shortlist.`).then(() => send('POST', '/api/refresh').catch(() => {})); break;
+    }, (r) => `${fetchNote(`${r.added} stocks`)} The 10 largest are on your shortlist.`).then(kick); break;
     case 'shortlist-top': run(async () => { await send('POST', '/api/watchlist/shortlist-top'); setListTab('shortlist'); }, 'The 10 largest SPUS companies are on your shortlist'); break;
     case 'list-tab': setListTab(b.dataset.tab); drawList(); showTicker(); break; // an empty tab clears the stock page too
     case 'star': toggleStar(ticker, b.dataset.on === 'true'); break;
@@ -822,7 +827,7 @@ document.addEventListener('submit', (e) => {
   switch (f.dataset.form) {
     case 'add-watch': {
       const tickers = v('tickers').toUpperCase().split(/[\s,]+/).filter(Boolean);
-      if (tickers.length) run(() => send('POST', '/api/watchlist', { tickers }), (r) => fetchNote(r.added)).then(() => send('POST', '/api/refresh').catch(() => {}));
+      if (tickers.length) run(() => send('POST', '/api/watchlist', { tickers }), (r) => fetchNote(r.added)).then(kick);
       break;
     }
     case 'add-level': run(() => send('POST', '/api/levels', { ticker: f.dataset.ticker, name: v('name'), price: parseFloat(v('price')) }), 'Level saved'); break;
@@ -830,7 +835,7 @@ document.addEventListener('submit', (e) => {
     case 'review': break; // a verdict needs an explicit button press, not Enter
     case 'setting': run(() => send('POST', '/api/settings', { key: f.dataset.key, value: v('value') }), 'Saved; the simulation was re-run'); break;
     case 'practice-custom': setMode('practice'); run(async () => { state.practice = await send('POST', '/api/practice/start', { scenario: 'custom', date: v('date') }); drawPracticeBar(); location.hash = 'watchlist'; }, 'Practice started. Pick a stock and press Buy.'); break;
-    case 'setup': run(() => send('POST', '/api/setup', { tiingoKey: v('tiingoKey'), name: v('name'), email: v('email') }), 'Connected. Fetching data in the background.').then(() => send('POST', '/api/refresh').catch(() => {})); break;
+    case 'setup': run(() => send('POST', '/api/setup', { tiingoKey: v('tiingoKey'), name: v('name'), email: v('email') }), 'Connected. Fetching data in the background.').then(kick); break;
   }
 });
 
