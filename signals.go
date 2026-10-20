@@ -343,14 +343,17 @@ func runWatch(db *sql.DB, args []string) error {
 	return nil
 }
 
-// addWatch adds tickers to the watchlist and returns how many were new.
+// addWatch adds tickers to the watchlist and returns how many were new. It checks
+// every ticker first, so a typo adds nothing rather than half the list.
 func addWatch(db *sql.DB, tickers []string) (int, error) {
+	for i, t := range tickers {
+		tickers[i] = strings.ToUpper(strings.TrimSpace(t))
+		if !tickerRe.MatchString(tickers[i]) {
+			return 0, fmt.Errorf("%q is not a ticker; nothing was added", tickers[i])
+		}
+	}
 	added := 0
 	for _, t := range tickers {
-		t = strings.ToUpper(strings.TrimSpace(t))
-		if !tickerRe.MatchString(t) {
-			return added, fmt.Errorf("%q is not a ticker", t)
-		}
 		res, err := db.Exec(`INSERT OR IGNORE INTO watchlist (ticker, added_on) VALUES (?, ?)`, t, nyToday())
 		if err != nil {
 			return added, err
