@@ -1,4 +1,5 @@
 # suspt
+<img width="3024" height="638" alt="image" src="https://github.com/user-attachments/assets/c456a81f-116e-4204-90d1-5c20085110d0" />
 
 A Sharia-compliant US stock tracker. Simulation only: no brokerage, no real orders. Made for learning purposes only.
 One Go binary, one SQLite file, a CLI for every change and a read-only dashboard.
