@@ -487,3 +487,4 @@ body.practice .top { border-bottom: 2px solid var(--warning); }
 .cmdbar input { flex: 1; border: 0; background: none; font-size: 16px; text-transform: uppercase; padding: 4px 0; }
 .cmdbar input::placeholder { text-transform: none; }
 .cmdbar p { max-width: 720px; margin: 8px auto 0; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 14px; color: var(--muted); }
+.cmd-btn { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }

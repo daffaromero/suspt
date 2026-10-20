@@ -100,7 +100,9 @@ func latestDate(db *sql.DB) string {
 
 func monitorReport(db *sql.DB, since string) (monitor, error) {
 	m := monitor{AsOf: latestDate(db), Tiles: []tile{}, Events: []event{}}
-	if _, err := time.Parse(time.DateOnly, since); err != nil || since >= m.AsOf {
+	if _, err := time.Parse(time.DateOnly, since); m.AsOf == "" {
+		since = "" // no data yet
+	} else if err != nil || since >= m.AsOf {
 		since = addDays(m.AsOf, -7)
 	}
 	m.Since = since

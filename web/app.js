@@ -674,14 +674,16 @@ const ideasHTML = (ideas) => (ideas.length
 const seen = {};
 async function viewHome(main) {
   if (!(mode in seen)) seen[mode] = store.get(`suspt-seen-${mode}`);
-  const [m, ideas, st, orders] = await Promise.all([get(`/api/monitor?since=${encodeURIComponent(seen[mode])}`), get('/api/ideas'), get('/api/status'), get('/api/orders')]);
+  let [m, ideas, st, orders] = await Promise.all([get(`/api/monitor?since=${encodeURIComponent(seen[mode])}`), get('/api/ideas'), get('/api/status'), get('/api/orders')]);
   state.keys = st.keys;
   if (m.asOf) store.set(`suspt-seen-${mode}`, m.asOf);
   const intro = inPractice() ? await practicePanel() : checklist(st, orders.length > 0);
+  if (intro && !inPractice()) ideas = ideas.filter((i) => i.kind !== 'start'); // getting started already says it
   const since = seen[mode] && seen[mode] === m.since ? `since your last visit (${shortDate(m.since)})` : 'in the past week';
   main.innerHTML = `${intro}
     ${label('01', 'your stocks')}
     ${m.tiles.length ? `<div class="tiles">${m.tiles.map(tileHTML).join('')}</div>`
+      : intro && !inPractice() ? empty('The stocks you star appear here, each with a small chart.')
       : `<div class="panel narrow"><p>Star the stocks you want to follow and they appear here with a small chart. Five to ten is plenty.</p>
         <p>${btn('go', 'Open the watchlist', 'data-to="watchlist"', 'primary')}${inPractice() ? '' : ' ' + btn('shortlist-top', 'Shortlist the 10 largest SPUS companies')}</p></div>`}
     <div class="grid2 home2">
@@ -737,7 +739,7 @@ async function viewPro(main, ticker) {
   const [m, s, ideas, orders] = await Promise.all([get('/api/monitor'), get('/api/summary'), get('/api/ideas'), get('/api/orders')]);
   state.pro = m.tiles;
   if (ticker) state.proSel = ticker;
-  if (!state.proSel) state.proSel = m.tiles[0]?.ticker || s.positions[0]?.ticker || s.benchmark;
+  if (!state.proSel) state.proSel = m.tiles.find((t) => t.date)?.ticker || s.positions[0]?.ticker || (s.asOf ? s.benchmark : '');
   const pane = (cls, title, body) => `<section class="pane ${cls}"><h2 class="pane-h">${title}</h2>${body}</section>`;
   main.innerHTML = `<div class="pro">
     ${pane('quotes', 'quotes <span class="fine">shortlist and held · j/k</span>', m.tiles.length
@@ -760,6 +762,7 @@ async function viewPro(main, ticker) {
 
 async function proChart() {
   const t = state.proSel;
+  if (!t) { $('#pro-title').textContent = 'chart'; $('#pro-chart').innerHTML = empty('Nothing to chart until prices arrive.'); return; }
   history.replaceState(null, '', `#pro/${t}`);
   $('#path').textContent = `~/pro/${t.toLowerCase()}`;
   document.querySelectorAll('#pq tr').forEach((tr) => tr.setAttribute('aria-selected', String(tr.dataset.ticker === t)));
@@ -1057,6 +1060,7 @@ document.addEventListener('click', (e) => {
     case 'mode': setMode(to); state.practice = null; loadPractice().catch(() => {}); location.hash = to === 'practice' ? 'practice' : 'home'; route(); pollStatus(true); break;
     case 'advance': advance(b.dataset.step); break;
     case 'theme': setTheme(to); break;
+    case 'cmd': openCmd(); break;
     case 'level': setLevel(Number(to)); toast(`Level: ${LEVELS[Number(to) - 1]}. The menu now shows ${views().length} pages.`); break;
     case 'read': store.set('suspt-read', [...readSet(), id].join(',')); route(); break;
     case 'pro-sel': state.proSel = ticker; proChart(); break;
@@ -1138,7 +1142,7 @@ function drawNav() {
   const listKeys = state.view === 'pro' ? '<span class="hint"><kbd>j/k</kbd>move</span><span class="hint"><kbd>b</kbd>buy</span><span class="hint"><kbd>x</kbd>sell</span>'
     : state.view === 'watchlist' ? '<span class="hint"><kbd>j/k</kbd>move</span><span class="hint"><kbd>b</kbd>buy</span><span class="hint"><kbd>s</kbd>star</span><span class="hint"><kbd>h</kbd>rule hits</span>' : '';
   const filterKey = state.view === 'watchlist' || state.view === 'screen' ? '<span class="hint"><kbd>/</kbd>filter</span>' : '';
-  $('#hints').innerHTML = `<span class="hint opt"><kbd>1-${Math.min(9, shown.length)}</kbd>pages</span><span class="hint opt"><kbd>:</kbd>command</span>` + listKeys + filterKey +
+  $('#hints').innerHTML = `<span class="hint opt"><kbd>1-${Math.min(9, shown.length)}</kbd>pages</span><button type="button" class="hint cmd-btn" data-act="cmd"><kbd>:</kbd>command</button>` + listKeys + filterKey +
     (inPractice() && state.practice?.active ? '<span class="hint"><kbd>n</kbd>next day</span><span class="hint"><kbd>w</kbd>week</span><span class="hint"><kbd>m</kbd>month</span>' : '') +
     '<span class="hint"><kbd>?</kbd>help</span>';
 }
