@@ -105,6 +105,14 @@ func setSetting(db *sql.DB, key, val string) error {
 		}
 	case "benchmark", "allowed_etfs":
 		val = strings.ToUpper(val)
+		var n int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM prices WHERE ticker = ?`, val).Scan(&n); err != nil {
+			return err
+		}
+		if key == "benchmark" && n == 0 {
+			// Saving it would leave nothing to compare against, so refuse and save nothing.
+			return fmt.Errorf("%s has no prices yet: add it to the watchlist, let the data refresh, then choose it here", val)
+		}
 	default:
 		if v, err := strconv.ParseFloat(val, 64); err != nil || v < 0 || math.IsNaN(v) || math.IsInf(v, 0) {
 			return fmt.Errorf("%s must be a number >= 0", key)
