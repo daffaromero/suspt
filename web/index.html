@@ -6,10 +6,11 @@
 <title>suspt</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230e1450'/%3E%3Cpath d='M3 11l3-4 3 2 4-5' stroke='%23f4d33a' stroke-width='1.6' fill='none'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="style.css">
+<script src="theme.js"></script>
 </head>
 <body>
 <header class="top">
-  <a class="brand" href="#portfolio" aria-label="suspt home">
+  <a class="brand" href="#home" aria-label="suspt home">
     <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M2 11.5l3.5-4.5 3 2.2L14 3" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
     <b>suspt</b>
   </a>
@@ -29,6 +30,10 @@
 </footer>
 
 <div id="toast" class="toast" role="status" hidden></div>
+<div id="cmd" class="cmdbar" hidden>
+  <form id="cmd-form" role="search" aria-label="Command bar"><span class="prompt" aria-hidden="true">&gt;</span><input id="cmd-input" autocomplete="off" spellcheck="false" aria-label="Command" placeholder="NVDA, BUY NVDA 50, PORT, HELP"></form>
+  <p id="cmd-out" class="fine" aria-live="polite"></p>
+</div>
 <dialog id="trade" aria-label="Paper trade"></dialog>
 
 <div id="help" class="help" hidden role="dialog" aria-modal="true" aria-labelledby="help-title">
@@ -39,11 +44,13 @@
       <li><b>Sharia screen.</b> Every company is checked with S&amp;P's Shariah rules: limits on debt, cash and income from interest or haram business. Only compliant stocks can be bought, and if one you hold stops being compliant it is sold for you.</li>
       <li><b>Every trade asks why.</b> The journal later shows which reasons and themes made money, so you learn from your own decisions.</li>
       <li><b>Benchmark.</b> Your result is compared with simply buying SPUS, a sharia fund, with the same deposits.</li>
+      <li><b>Learn</b> walks you from beginner to advanced. Your level decides which pages are in the menu; change it there or in Settings, where you can also pick a theme.</li>
       <li><b>Data refreshes by itself</b> after each US market close while the app is open. The top-right button shows its progress.</li>
     </ul>
     <div class="cols">
       <dl>
-        <dt>1 to 7</dt><dd>switch page</dd>
+        <dt>1 to 9</dt><dd>switch page</dd>
+        <dt>:</dt><dd>command bar (also Ctrl+K)</dd>
         <dt>j / k</dt><dd>next / previous stock</dd>
         <dt>b</dt><dd>buy the selected stock</dd>
         <dt>/</dt><dd>filter</dd>

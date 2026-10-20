@@ -269,7 +269,7 @@ func practiceMissions(d *sql.DB, start, clock string) []mission {
 			"Open a stock in the watchlist and press Buy. The reason you write is what the journal scores later.",
 			count(d, `SELECT COUNT(*) FROM orders WHERE side = 'buy'`) > 0},
 		{"level-rule", "Mark a price level and make a rule that watches it",
-			"On a stock's page, add a level named support. Then on Signals, use the example close <= level:support.",
+			"On a stock's page, add a level named support. Then on Rules, use the example close <= level:support.",
 			count(d, `SELECT COUNT(*) FROM levels`) > 0 && count(d, `SELECT COUNT(*) FROM rules WHERE condition LIKE '%level:%'`) > 0},
 		{"first-fill", "Fast-forward until your order fills",
 			"Orders fill at the next market open, never at the price you saw. Press next day.",

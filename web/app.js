@@ -31,8 +31,19 @@ const label = (n, text) => `<h2 class="section-label"><span class="num">${n}</sp
 const empty = (html) => `<p class="empty">${html}</p>`;
 const btn = (act, text, attrs = '', cls = '') => `<button type="button" class="btn ${cls}" data-act="${act}" ${attrs}>${text}</button>`;
 
-const VIEWS = ['portfolio', 'watchlist', 'journal', 'signals', 'orders', 'screen', 'settings', 'practice'];
-const state = { view: 'portfolio', sel: '', filter: '', charts: [], data: {}, range: '1Y', hits: false, status: null, practice: null };
+// Pages by level: a beginner sees five, and the rest appear once they're useful. Practice
+// isn't in the menu because the real/practice switch next to it leads there.
+const PAGES = [['home', 1], ['watchlist', 1], ['portfolio', 1], ['journal', 2], ['orders', 2], ['rules', 2], ['screen', 2], ['pro', 3], ['learn', 1], ['settings', 1], ['practice', 9]];
+const ALL_VIEWS = PAGES.map(([v]) => v);
+const LEVELS = ['beginner', 'intermediate', 'advanced'];
+const THEMES = ['night', 'day', 'terminal'];
+const store = {
+  get: (k) => { try { return localStorage.getItem(k) || ''; } catch { return ''; } },
+  set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* storage blocked */ } },
+};
+let level = Math.max(1, LEVELS.indexOf(store.get('suspt-level')) + 1);
+const views = () => PAGES.filter(([, l]) => l <= level).map(([v]) => v);
+const state = { view: 'home', sel: '', filter: '', charts: [], data: {}, range: '1Y', hits: false, status: null, practice: null };
 
 // Practice ("time machine") is a separate account; every request says which one it means.
 let mode = 'real';
@@ -151,16 +162,14 @@ function checklist(st, hasTrades) {
 
 /* views */
 async function viewPortfolio(main) {
-  const [s, st, orders] = await Promise.all([get('/api/summary'), get('/api/status'), get('/api/orders')]);
-  const intro = inPractice() ? await practicePanel() : checklist(st, orders.length > 0);
+  const [s, orders] = await Promise.all([get('/api/summary'), get('/api/orders')]);
   const waiting = waitingOrders(orders);
   if (!s.asOf) {
-    main.innerHTML = intro + label('01', 'portfolio') + waiting + empty('The simulation starts after the first market day with data. Your starting cash appears here then.');
+    main.innerHTML = label('01', 'portfolio') + waiting + empty('The simulation starts after the first market day with data. Your starting cash appears here then.');
     return;
   }
   const vs = s.twr - s.benchTwr;
-  main.innerHTML = `${intro}
-    ${label('01', 'portfolio')}
+  main.innerHTML = `${label('01', 'portfolio')}
     <div class="hero">
       <div class="big">${money(s.value)}</div>
       <div class="sub">paper money as of ${esc(s.asOf)} · started ${esc(s.start)} · cash ${money(s.cash)}</div>
@@ -261,6 +270,7 @@ async function viewWatchlist(main, ticker, navigated) {
     return;
   }
   state.list = listTab(rows);
+  if (ticker && navigated && !rows.some((r) => r.ticker === ticker)) toast(`${ticker} isn't on your watchlist. Add it with the box on the left.`, 'err');
   // The selection is a ticker, never a list position: positions shift when the filter changes.
   // A link (navigation) must show what it names, even if that means clearing the filter or
   // leaving the shortlist tab; a re-render after an action keeps the tab and filter as they are.
@@ -340,6 +350,7 @@ async function showTicker() {
   try {
     if (!row.date) throw new Error('no prices yet');
     [d, orders] = await Promise.all([get(`/api/ticker/${encodeURIComponent(row.ticker)}`), get('/api/orders')]);
+    if (state.view !== 'watchlist' || state.sel !== row.ticker) return; // the person moved on while this loaded
   } catch (e) {
     $('#detail').innerHTML = `<div class="detail-head"><h1>${esc(row.ticker)}</h1>${badge(row.status)}<span class="spacer"></span>${unwatch}</div>` + (row.date
       ? `<p class="flag">${esc(e.message)}</p>`
@@ -386,7 +397,22 @@ async function showTicker() {
       </div>
     </div>`;
 
-  const c = baseChart($('#px-chart'));
+  const c = priceChart($('#px-chart'), $('#px-legend'), d);
+  const hitsBtn = document.createElement('button');
+  hitsBtn.textContent = `rule hits ${d.hits.length}`;
+  hitsBtn.title = 'show where your rules turned true (h)';
+  hitsBtn.setAttribute('aria-pressed', String(state.hits));
+  hitsBtn.onclick = () => { state.hits = !state.hits; showTicker(); };
+  const ranges = rangeButtons((r) => setRange(c, d.bars, r));
+  ranges.prepend(hitsBtn);
+  $('#px-ranges').append(ranges);
+  setRange(c, d.bars, state.range);
+}
+
+// priceChart draws daily candles with the 50- and 200-day averages, your levels, your
+// trades and (when switched on) the days your rules turned true.
+function priceChart(el, legendEl, d) {
+  const c = baseChart(el);
   const UP = css('--up'), DOWN = css('--down');
   const candles = c.addCandlestickSeries({ upColor: 'rgba(0,0,0,0)', downColor: DOWN, borderUpColor: UP, borderDownColor: DOWN, wickUpColor: UP, wickDownColor: DOWN, priceLineVisible: false });
   candles.setData(d.bars);
@@ -412,22 +438,14 @@ async function showTicker() {
   const legend = (t) => {
     const b = bars.get(t);
     if (!b) return;
-    $('#px-legend').innerHTML = `<span>o <b>${num(b.open)}</b> h <b>${num(b.high)}</b> l <b>${num(b.low)}</b> c <b>${num(b.close)}</b></span>
+    legendEl.innerHTML = `<span>o <b>${num(b.open)}</b> h <b>${num(b.high)}</b> l <b>${num(b.low)}</b> c <b>${num(b.close)}</b></span>
       <span title="50-day average price"><span class="sw" style="border-color:${S1}"></span>50-day avg<b>${num(avg50.get(t))}</b></span>
       <span title="200-day average price"><span class="sw" style="border-color:${S2}"></span>200-day avg<b>${num(avg200.get(t))}</b></span><span class="when">${esc(t)}</span>`;
   };
   const lastT = d.bars[d.bars.length - 1].time;
   legend(lastT);
   c.subscribeCrosshairMove((e) => legend(e.time || lastT));
-  const hitsBtn = document.createElement('button');
-  hitsBtn.textContent = `rule hits ${d.hits.length}`;
-  hitsBtn.title = 'show where your rules turned true (h)';
-  hitsBtn.setAttribute('aria-pressed', String(state.hits));
-  hitsBtn.onclick = () => { state.hits = !state.hits; showTicker(); };
-  const ranges = rangeButtons((r) => setRange(c, d.bars, r));
-  ranges.prepend(hitsBtn);
-  $('#px-ranges').append(ranges);
-  setRange(c, d.bars, state.range);
+  return c;
 }
 
 function reviewButtons(ticker) {
@@ -484,7 +502,7 @@ const RULE_EXAMPLES = [
   ['chg < -3', 'drops more than 3% in a day'],
 ];
 
-async function viewSignals(main) {
+async function viewRules(main) {
   const [sigs, rules] = await Promise.all([get('/api/signals'), get('/api/rules')]);
   main.innerHTML = `${label('01', 'your rules that are true today')}
     ${sigs.length ? `<div class="tbl-wrap"><table><thead><tr><th>stock</th><th>date</th><th>idea</th><th>rule</th><th>thesis</th><th>screen</th><th>condition</th></tr></thead><tbody>
@@ -559,7 +577,7 @@ async function viewSettings(main) {
     return `<input name="value" type="${type}" ${type === 'number' ? 'step="any" min="0"' : ''} value="${esc(it.value)}" aria-label="${esc(SETTING_LABELS[it.key] || it.key)}">`;
   };
   if (inPractice()) { // practice uses saved history: only fees, tax and limits apply
-    main.innerHTML = `${label('01', 'practice settings')}
+    main.innerHTML = `${appearance('00')}${label('01', 'practice settings')}
       <p class="lede">Fees, tax and limits for the practice account. They start as copies of your real settings; changing them here doesn't change the real ones.</p>
       <div class="settings">${items.filter((it) => !['start_date', 'auto_refresh', 'benchmark'].includes(it.key)).map((it) => `
         <form class="setting" data-form="setting" data-key="${esc(it.key)}">
@@ -568,7 +586,7 @@ async function viewSettings(main) {
         </form>`).join('')}</div>`;
     return;
   }
-  main.innerHTML = `${label('01', 'data sources')}
+  main.innerHTML = `${appearance('00')}${label('01', 'data sources')}
     <div class="panel narrow">
       <p>${st.keys ? '<span class="badge COMPLIANT"><span class="i">✓</span>connected</span> Enter new values only if you want to replace them.' : '<span class="badge REVIEW"><span class="i">?</span>not connected yet</span>'}</p>
       <form class="setup" data-form="setup">
@@ -610,6 +628,228 @@ async function toggleStar(ticker, on) {
   showTicker();
 }
 
+/* home: the stocks you follow, what changed since your last visit, rule-based ideas */
+const shortDate = (d) => new Date(`${d}T12:00:00`).toLocaleDateString('en-US', { day: 'numeric', month: 'short' });
+const TREND = { up: 'uptrend', down: 'downtrend', mixed: 'no clear trend' };
+
+function spark(values, cls) {
+  if (values.length < 2) return '<svg class="spark" aria-hidden="true"></svg>';
+  const lo = Math.min(...values), hi = Math.max(...values), span = hi - lo || 1;
+  const pts = values.map((v, i) => `${((i / (values.length - 1)) * 100).toFixed(2)},${(26 - ((v - lo) / span) * 24).toFixed(2)}`).join(' ');
+  return `<svg class="spark ${cls}" viewBox="0 0 100 28" preserveAspectRatio="none" aria-hidden="true"><polyline points="${pts}" vector-effect="non-scaling-stroke"/></svg>`;
+}
+
+const tileHTML = (t) => `<a class="tile" href="#${state.view === 'pro' ? 'pro' : 'watchlist'}/${esc(t.ticker)}">
+  <span class="th"><b>${esc(t.ticker)}</b>${t.starred ? '<span class="star" aria-label="on shortlist">★</span>' : ''}${t.held ? '<span class="tag">held</span>' : ''}<span class="spacer"></span>${badge(t.status)}</span>
+  ${t.date ? `<span class="tp"><span class="px">${money(t.close)}</span><span class="${dir(t.change)}">${pct(t.change, 2)}</span></span>
+  ${spark(t.spark, dir(t.change1m))}
+  <span class="tm">3 months shown · 1 month <span class="${dir(t.change1m)}">${pct(t.change1m)}</span> · ${TREND[t.trend]}</span>
+  ${t.level ? `<span class="tm">your ${esc(t.level.name)} level ${money(t.level.price)}, ${pct(t.level.dist)} away</span>` : ''}
+  ${t.signals.map((g) => `<span class="tm">${badge(g.blocked ? 'BLOCKED' : g.action)} ${esc(g.rule)}</span>`).join('')}`
+  : '<span class="tm">no prices yet</span>'}</a>`;
+
+const EVENT_ICON = { fill: '✓', dividend: '$', purification: '◇', split: '÷', compliance: '§', level: '─', rule: '◎', move: '↕' };
+const eventsHTML = (events) => (events.length
+  ? `<ul class="events">${events.map((e) => `<li><span class="ei ei-${esc(e.kind)}" aria-hidden="true">${EVENT_ICON[e.kind] || '·'}</span><span class="ed">${esc(shortDate(e.date))}</span>
+      <span>${e.ticker ? `<a href="#watchlist/${esc(e.ticker)}">${esc(e.text)}</a>` : esc(e.text)}</span></li>`).join('')}</ul>`
+  : empty('Nothing new. Quiet days are normal.'));
+
+function ideaAction(i) {
+  const t = esc(i.ticker || '');
+  return {
+    buy: btn('trade', `Plan a ${t} order`, `data-ticker="${t}" data-side="buy"`, 'small'),
+    sell: btn('trade', `Sell ${t}`, `data-ticker="${t}" data-side="sell"`, 'small'),
+    open: btn('go', `Open ${t}`, `data-to="watchlist/${t}"`, 'small'),
+    journal: btn('go', 'Open the journal', 'data-to="journal"', 'small'),
+    shortlist: inPractice() ? btn('go', 'Open the watchlist', 'data-to="watchlist"', 'small') : btn('shortlist-top', 'Shortlist the 10 largest', '', 'small'),
+  }[i.action] || '';
+}
+const ideasHTML = (ideas) => (ideas.length
+  ? `<div class="ideas">${ideas.map((i) => `<div class="idea idea-${esc(i.kind)}"><b>${esc(i.title)}</b><p>${esc(i.because)}</p>
+      <p class="fine">Why you're seeing this: ${esc(i.rule)}.</p>${ideaAction(i)}</div>`).join('')}</div>`
+  : empty('No ideas right now. That usually means nothing needs your attention.'));
+
+// Home remembers the latest data date you saw, per account, and shows what happened after it.
+// The date is read once per page load, so refreshing the page doesn't wipe the list.
+const seen = {};
+async function viewHome(main) {
+  if (!(mode in seen)) seen[mode] = store.get(`suspt-seen-${mode}`);
+  const [m, ideas, st, orders] = await Promise.all([get(`/api/monitor?since=${encodeURIComponent(seen[mode])}`), get('/api/ideas'), get('/api/status'), get('/api/orders')]);
+  state.keys = st.keys;
+  if (m.asOf) store.set(`suspt-seen-${mode}`, m.asOf);
+  const intro = inPractice() ? await practicePanel() : checklist(st, orders.length > 0);
+  const since = seen[mode] && seen[mode] === m.since ? `since your last visit (${shortDate(m.since)})` : 'in the past week';
+  main.innerHTML = `${intro}
+    ${label('01', 'your stocks')}
+    ${m.tiles.length ? `<div class="tiles">${m.tiles.map(tileHTML).join('')}</div>`
+      : `<div class="panel narrow"><p>Star the stocks you want to follow and they appear here with a small chart. Five to ten is plenty.</p>
+        <p>${btn('go', 'Open the watchlist', 'data-to="watchlist"', 'primary')}${inPractice() ? '' : ' ' + btn('shortlist-top', 'Shortlist the 10 largest SPUS companies')}</p></div>`}
+    <div class="grid2 home2">
+      <section>${label('02', `what changed ${since}`)}${eventsHTML(m.events)}</section>
+      <section>${label('03', 'ideas')}${ideasHTML(ideas)}
+        <p class="fine">Ideas come from fixed rules about your account and your shortlist, never from predictions. They're things to look at, not instructions.</p></section>
+    </div>`;
+}
+
+/* learn: a path from beginner to advanced, finished by doing things */
+const readSet = () => new Set(store.get('suspt-read').split(',').filter(Boolean));
+const LESSONS = [
+  ['what', 1, 'What suspt is', 'suspt gives you pretend money to invest in real US stocks at real prices. Nothing here touches real money. The point is to practise deciding, then see later whether your reasons were any good.', 'read'],
+  ['connect', 1, 'Connect the free data sources', 'Prices come from Tiingo and company filings from the SEC. Both are free: you paste a token and your name once, and suspt keeps them on this computer.', (c) => c.st.keys, ['settings', 'Open settings']],
+  ['shortlist', 1, 'Pick a few stocks to follow', 'Five to ten companies you understand teach you more than two hundred you don\'t. Star them on the watchlist and they appear on Home with a small chart.', (c) => c.watch.filter((r) => r.starred).length >= 3, ['watchlist', 'Open the watchlist']],
+  ['screen', 1, 'Read a Sharia screen', 'Every company page has three bars: debt, cash and impure income. Each has to stay left of its tick (30%, 30% and 5%). If one stays over for too long, the stock stops being compliant and you can\'t buy it.', 'read', ['watchlist', 'Open a stock']],
+  ['first-trade', 1, 'Make your first paper trade', 'Press Buy on a stock and write one sentence about why. Orders fill at the next market open, never at the price you just saw, so nobody can cheat, including you.', (c) => c.orders.length > 0, ['watchlist', 'Open the watchlist']],
+  ['practice', 1, 'Try the time machine', 'Practice starts an account in the past. You trade as usual, then jump a day, a week or a month ahead and see what happened. It\'s the quickest way to learn, because you don\'t have to wait months.', (c) => c.practice.active, ['practice', 'Open practice']],
+  ['benchmark', 2, 'Compare yourself with the fund', 'The portfolio chart has two lines: you, and SPUS bought with the same deposits on the same days. If you can\'t beat the fund over a year, buying the fund is the honest answer, and that\'s a fine result.', 'read', ['portfolio', 'Open the portfolio']],
+  ['level', 2, 'Mark a price level', 'On a stock page, add a level such as support at a price you\'d be happy to buy near. It shows on the chart, and Home tells you when the price gets there.', (c) => c.watch.some((r) => r.levels.length), ['watchlist', 'Open a stock']],
+  ['rule', 2, 'Write a rule', 'A rule is a short condition the app checks every day, like close crosses_above sma200. It never trades for you. It flags the stock so you take a look.', (c) => c.rules.length > 0, ['rules', 'Open rules']],
+  ['journal', 2, 'Score your reasons', 'Once trades fill, the journal groups them by the theme you gave them and shows what each theme really returned, dividends included. This is the page that teaches you the most.', 'read', ['journal', 'Open the journal']],
+  ['concentration', 2, 'Watch how concentrated you are', 'If one stock or one sector is most of your money, one bad day hurts a lot. The portfolio page shows each sector against your limit, and Home warns you when you go over.', 'read', ['portfolio', 'Open the portfolio']],
+  ['quarter', 2, 'Finish a practice quarter', 'Run a practice account for three months and read the report card. Then try a different starting date: a good idea in 2024 may look different in 2023.', (c) => c.practice.missions?.some((m) => m.id === 'quarter' && m.done), ['practice', 'Open practice']],
+  ['commands', 3, 'Use the command bar', 'Press : or Ctrl+K and type. NVDA opens a stock, BUY NVDA 50 opens an order for $50, SELL NVDA ALL, PORT, SCRN and HELP do what they say.', (c) => c.flags.has('cmd'), null],
+  ['pro', 3, 'Open the pro view', 'Quotes, a chart, your positions, ideas, news and orders on one screen, driven from the keyboard. It looks best with the terminal theme.', (c) => c.flags.has('pro'), ['pro', 'Open pro']],
+  ['standards', 3, 'Compare the three standards', 'The screen page puts S&amp;P, Dow Jones Islamic and AAOIFI side by side. They measure against different things: a 3-year average value, a 2-year average, or today\'s value. Find a stock where they disagree and work out why.', 'read', ['screen', 'Open the screen']],
+  ['limit', 3, 'Use a limit order', 'A limit order only fills at your price or better, and "keep trying" leaves it waiting until it does. Useful for buying near a level instead of chasing the price.', (c) => c.orders.some((o) => o.kind.startsWith('limit')), ['watchlist', 'Open the watchlist']],
+];
+
+async function viewLearn(main) {
+  const [st, watch, orders, rules, practice] = await Promise.all([get('/api/status'), get('/api/watchlist'), get('/api/orders'), get('/api/rules'), get('/api/practice')]);
+  const read = readSet();
+  const ctx = { st, watch, orders, rules: rules.filter((r) => !r.retiredOn), practice, flags: new Set(['cmd', 'pro'].filter((f) => store.get(`suspt-used-${f}`))) };
+  const done = (l) => (l[4] === 'read' ? read.has(l[0]) : Boolean(l[4](ctx)));
+  const levelDone = (n) => LESSONS.filter((l) => l[1] === n).every(done);
+  const blurb = ['home, watchlist, portfolio, learn and settings, plus practice', 'adds the journal, orders, rules and the full screen', 'adds the pro view, best with the terminal theme'];
+  main.innerHTML = `${label('01', 'learn')}
+    <p class="lede">Three levels, each a handful of short lessons. Most finish themselves when you do the thing; the rest have a <b>got it</b> button. Your level decides which pages are in the menu, so nothing shows up before it's useful.</p>
+    <div class="levels" role="group" aria-label="Your level">${LEVELS.map((name, i) => `<button type="button" data-act="level" data-to="${i + 1}" aria-pressed="${level === i + 1}">
+      <b>${name}</b><span class="fine">${blurb[i]}</span><span class="fine">${LESSONS.filter((l) => l[1] === i + 1).filter(done).length} of ${LESSONS.filter((l) => l[1] === i + 1).length} done</span></button>`).join('')}</div>
+    ${level < 3 && levelDone(level) ? `<div class="panel narrow levelup"><p>You've finished the ${LEVELS[level - 1]} lessons. Ready for more pages?</p>${btn('level', `Switch to ${LEVELS[level]}`, `data-to="${level + 1}"`, 'primary')}</div>` : ''}
+    ${[1, 2, 3].map((n) => `${label(`0${n + 1}`, LEVELS[n - 1])}<ol class="steps lessons">${LESSONS.filter((l) => l[1] === n).map((l) => {
+      const ok = done(l);
+      return `<li class="${ok ? 'done' : ''}"><span class="tick" aria-hidden="true">${ok ? '✓' : '○'}</span><div><b>${esc(l[2])}</b><p>${l[3]}</p>
+        ${ok ? '' : `${l[5] ? btn('go', l[5][1], `data-to="${l[5][0]}"`, 'small') : ''} ${l[4] === 'read' ? btn('read', 'Got it', `data-id="${l[0]}"`, 'small quiet') : ''}`}</div></li>`;
+    }).join('')}</ol>`).join('')}`;
+}
+
+/* pro: everything on one screen, for the keyboard */
+async function viewPro(main, ticker) {
+  store.set('suspt-used-pro', '1');
+  const [m, s, ideas, orders] = await Promise.all([get('/api/monitor'), get('/api/summary'), get('/api/ideas'), get('/api/orders')]);
+  state.pro = m.tiles;
+  if (ticker) state.proSel = ticker;
+  if (!state.proSel) state.proSel = m.tiles[0]?.ticker || s.positions[0]?.ticker || s.benchmark;
+  const pane = (cls, title, body) => `<section class="pane ${cls}"><h2 class="pane-h">${title}</h2>${body}</section>`;
+  main.innerHTML = `<div class="pro">
+    ${pane('quotes', 'quotes <span class="fine">shortlist and held · j/k</span>', m.tiles.length
+      ? `<table><thead><tr><th>stock</th><th class="n">last</th><th class="n">day</th><th class="n">1m</th><th>trend</th><th>scr</th></tr></thead><tbody id="pq">${m.tiles.map((t) => `<tr data-act="pro-sel" data-ticker="${esc(t.ticker)}" aria-selected="${t.ticker === state.proSel}">
+          <td><b>${esc(t.ticker)}</b>${t.held ? ' <span class="tag">held</span>' : ''}</td><td class="n">${num(t.close)}</td><td class="n ${dir(t.change)}">${pct(t.change, 2)}</td><td class="n ${dir(t.change1m)}">${pct(t.change1m)}</td>
+          <td>${{ up: '▲ up', down: '▼ down', mixed: '· mixed' }[t.trend]}</td><td>${badge(t.status)}</td></tr>`).join('')}</tbody></table>`
+      : empty('Star stocks on the watchlist to fill this board.'))}
+    ${pane('chartp', `<span id="pro-title">${esc(state.proSel)}</span>`, '<div class="legend" id="pro-legend"></div><div class="chart" id="pro-chart" role="img" aria-label="Price chart of the selected stock"></div><div id="pro-facts" class="fine"></div>')}
+    ${pane('side', 'account', `<p class="pro-k"><span>value <b>${money(s.value)}</b></span><span>cash <b>${money(s.cash)}</b></span><span>return <b>${pct(s.twr, 2)}</b></span><span>vs ${esc(s.benchmark)} <b class="${dir(s.twr - s.benchTwr)}">${((s.twr - s.benchTwr) * 100).toFixed(2)} pts</b></span></p>
+      ${s.positions.length ? `<table><thead><tr><th>held</th><th class="n">value</th><th class="n">p&amp;l</th><th class="n">wt</th></tr></thead><tbody>${s.positions.map((p) => `<tr data-act="pro-sel" data-ticker="${esc(p.ticker)}"><td>${esc(p.ticker)}</td><td class="n">${money(p.value)}</td><td class="n ${dir(p.pnl)}">${money(p.pnl, true)}</td><td class="n">${pct(p.weight, 0, false)}</td></tr>`).join('')}</tbody></table>` : '<p class="fine">Nothing held.</p>'}
+      <h2 class="pane-h">ideas</h2>${ideas.length ? `<ul class="pro-list">${ideas.map((i) => `<li class="idea-${esc(i.kind)}"><b>${esc(i.title)}</b> <span class="fine">${esc(i.rule)}</span></li>`).join('')}</ul>` : '<p class="fine">None.</p>'}
+      <h2 class="pane-h">news <span class="fine">past week</span></h2>${m.events.length ? `<ul class="pro-list">${m.events.slice(0, 12).map((e) => `<li><span class="ed">${esc(shortDate(e.date))}</span> ${esc(e.text)}</li>`).join('')}</ul>` : '<p class="fine">Quiet.</p>'}`)}
+    ${pane('orders', 'orders <span class="fine">b buy · x sell · : commands</span>', orders.length
+      ? `<table><thead><tr><th>#</th><th>placed</th><th>side</th><th>stock</th><th>size</th><th>type</th><th>status</th><th>filled</th><th></th></tr></thead><tbody>${orders.slice(0, 8).map((o) => `<tr><td>${o.id}</td><td>${esc(o.placedOn)}</td><td>${esc(o.side)}</td><td>${esc(o.ticker)}</td><td>${esc(o.size)}</td><td>${esc(o.kind)}</td><td>${badge(o.status)}</td>
+          <td>${o.price != null ? `${esc(o.filledOn)} @ ${money(o.price)}` : ''}</td><td>${o.status === 'open' ? btn('cancel', 'Cancel', `data-id="${o.id}"`, 'small quiet') : ''}</td></tr>`).join('')}</tbody></table>`
+      : '<p class="fine">No orders yet.</p>')}
+  </div>`;
+  await proChart();
+}
+
+async function proChart() {
+  const t = state.proSel;
+  history.replaceState(null, '', `#pro/${t}`);
+  $('#path').textContent = `~/pro/${t.toLowerCase()}`;
+  document.querySelectorAll('#pq tr').forEach((tr) => tr.setAttribute('aria-selected', String(tr.dataset.ticker === t)));
+  clearCharts();
+  let d;
+  try {
+    d = await get(`/api/ticker/${encodeURIComponent(t)}`);
+    if (state.view !== 'pro' || state.proSel !== t) return; // moved on while this loaded
+  } catch {
+    $('#pro-title').textContent = t;
+    $('#pro-chart').innerHTML = empty(`No prices for ${esc(t)} yet.`);
+    return;
+  }
+  const last = d.screens[d.screens.length - 1];
+  $('#pro-title').innerHTML = `<b>${esc(d.ticker)}</b> <span class="muted">${esc(d.name)}</span> ${badge(d.status)} ${d.held ? `<span class="tag">you hold ${num(d.held, 4)}</span>` : ''}`;
+  const c = priceChart($('#pro-chart'), $('#pro-legend'), d);
+  setRange(c, d.bars, '6M');
+  $('#pro-facts').innerHTML = `${last ? `screen ${esc(last.asOf)}: debt ${pct(last.debt, 1, false)} · cash ${pct(last.cash, 1, false)} · impure ${pct(last.npi, 1, false)} · purify ${pct(last.purif, 2, false)}` : 'not screened'}
+    ${d.levels.length ? ` · levels ${d.levels.map((l) => `${esc(l.name)} ${money(l.price)} (${pct(l.dist)})`).join(', ')}` : ''}`;
+}
+
+/* command bar: type a ticker or a command, Bloomberg style */
+const GOTO = { HOME: 'home', MON: 'home', PORT: 'portfolio', WL: 'watchlist', WATCH: 'watchlist', JRNL: 'journal', ORD: 'orders', ORDERS: 'orders', RULE: 'rules', RULES: 'rules', SCRN: 'screen', SCREEN: 'screen', PRO: 'pro', LEARN: 'learn', PRAC: 'practice', SET: 'settings' };
+const CMD_HELP = 'NVDA opens a stock · BUY NVDA 50 · SELL NVDA ALL · ADD NVDA · STAR NVDA · PORT HOME PRO SCRN JRNL ORD RULE LEARN SET · THEME DAY|NIGHT|TERMINAL · NEXT DAY|WEEK|MONTH (practice)';
+function openCmd() {
+  const bar = $('#cmd');
+  bar.hidden = false;
+  $('#cmd-out').textContent = CMD_HELP;
+  $('#cmd-input').value = '';
+  $('#cmd-input').focus();
+}
+const closeCmd = () => { $('#cmd').hidden = true; };
+async function runCommand(line) {
+  const w = line.trim().toUpperCase().replace(/\s*<?GO>?$/, '').split(/\s+/).filter(Boolean);
+  const [c, a, b] = w;
+  const out = (msg) => { $('#cmd-out').textContent = msg; };
+  if (!c) return;
+  store.set('suspt-used-cmd', '1');
+  if (c === 'HELP' || c === '?') return out(CMD_HELP);
+  if (GOTO[c]) { closeCmd(); location.hash = GOTO[c]; return; }
+  if (c === 'THEME') {
+    if (!THEMES.includes((a || '').toLowerCase())) return out(`Themes: ${THEMES.join(', ')}.`);
+    closeCmd(); setTheme(a.toLowerCase()); return;
+  }
+  if (c === 'NEXT') {
+    if (!inPractice() || !state.practice?.active) return out('NEXT works in practice mode.');
+    const step = { DAY: 'day', WEEK: 'week', MONTH: 'month' }[a || 'DAY'];
+    if (!step) return out('NEXT DAY, NEXT WEEK or NEXT MONTH.');
+    closeCmd(); advance(step); return;
+  }
+  const verb = ['BUY', 'SELL', 'ADD', 'STAR', 'UNSTAR'].includes(c);
+  if (!verb && (a || !TICKER.test(c))) return out(`I don't know "${w.join(' ')}". ${CMD_HELP}`);
+  if (verb) {
+    if (!a || !TICKER.test(a)) return out(`${c} needs a ticker, e.g. ${c} NVDA${c === 'BUY' ? ' 50' : ''}.`);
+    try {
+      if (c === 'BUY' || c === 'SELL') {
+        const amount = b === 'ALL' ? 'all' : b ? parseFloat(b.replace('$', '')) : undefined;
+        if (b && amount !== 'all' && !(amount > 0)) return out(`${b} isn't an amount. Use dollars, e.g. ${c} ${a} 50, or ${c} ${a} ALL.`);
+        closeCmd();
+        await openTrade(a, c.toLowerCase(), { amount });
+      } else if (c === 'ADD') {
+        const r = await send('POST', '/api/watchlist', { tickers: w.slice(1) });
+        closeCmd(); toast(fetchNote(r.added)); kick(); route();
+      } else {
+        await send('POST', '/api/watchlist/star', { tickers: w.slice(1), on: c === 'STAR' });
+        closeCmd(); toast(`${w.slice(1).join(', ')} ${c === 'STAR' ? 'on' : 'off'} your shortlist`); route();
+      }
+    } catch (e) { out(e.message); }
+    return;
+  }
+  closeCmd();
+  location.hash = `${state.view === 'pro' ? 'pro' : 'watchlist'}/${c}`;
+}
+const TICKER = /^[A-Z][A-Z0-9.-]{0,9}$/;
+
+function setTheme(t) {
+  document.documentElement.dataset.theme = t;
+  store.set('suspt-theme', t);
+  route(); // charts read their colours when drawn
+}
+function setLevel(n) {
+  level = n;
+  store.set('suspt-level', LEVELS[n - 1]);
+  route();
+}
+const appearance = (n) => `${label(n, 'look and level')}
+  <div class="panel narrow"><p>Theme ${THEMES.map((t) => btn('theme', t, `data-to="${t}" aria-pressed="${(document.documentElement.dataset.theme || 'night') === t}"`, 'small')).join(' ')}</p>
+  <p>Level ${LEVELS.map((l, i) => btn('level', l, `data-to="${i + 1}" aria-pressed="${level === i + 1}"`, 'small')).join(' ')}</p>
+  <p class="fine">Both are remembered by this browser. The level decides which pages are in the menu; the Learn page explains each one.</p></div>`;
+
 /* practice: the time machine */
 const longDate = (d) => new Date(`${d}T12:00:00`).toLocaleDateString('en-US', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
 
@@ -642,7 +882,7 @@ async function practicePanel() {
   const next = p.missions.find((m) => !m.done);
   return `${label('00', `practice since ${longDate(p.start)}`)}
     <ol class="steps missions">${p.missions.map((m) => `<li class="${m.done ? 'done' : ''}${m === next ? ' next' : ''}"><span class="tick" aria-hidden="true">${m.done ? '✓' : '○'}</span>
-      <div><b>${esc(m.title)}</b>${m === next ? `<p>${esc(m.hint)}</p>` : ''}</div></li>`).join('')}</ol>
+      <div><b>${esc(m.title)}</b>${m === next ? `<p>${esc(m.hint)}</p>${{ 'first-trade': btn('go', 'Open the watchlist', 'data-to="watchlist"', 'small'), 'level-rule': btn('go', 'Open rules', 'data-to="rules"', 'small') }[m.id] || ''}` : ''}</div></li>`).join('')}</ol>
     ${p.missions.every((m) => m.done) || p.missions.find((m) => m.id === 'quarter')?.done ? await reportCard() : ''}`;
 }
 
@@ -695,7 +935,7 @@ async function advance(step) {
 }
 
 /* trade ticket */
-async function openTrade(ticker, side) {
+async function openTrade(ticker, side, pre = {}) {
   const [d, j] = await Promise.all([get(`/api/ticker/${encodeURIComponent(ticker)}`), get('/api/journal').catch(() => ({ theses: [] }))]);
   const close = d.bars.length ? d.bars[d.bars.length - 1].close : null;
   const dlg = $('#trade');
@@ -734,6 +974,8 @@ async function openTrade(ticker, side) {
       : !(amt > 0) || !px ? ''
       : mode === 'usd' ? `about ${num(amt / px, 4)} shares` : `about ${money(amt * px)}`;
   };
+  if (pre.amount === 'all' && side === 'sell') f.mode.value = 'all';
+  else if (pre.amount > 0) f.amount.value = pre.amount;
   f.addEventListener('input', update);
   update();
   $('#trade-cancel').onclick = () => dlg.close();
@@ -761,7 +1003,7 @@ async function openTrade(ticker, side) {
   });
   if (typeof dlg.showModal !== 'function') throw new Error('this browser is too old for the order ticket; please update it');
   dlg.showModal();
-  f.amount.focus();
+  (pre.amount ? f.reason : f.amount).focus();
 }
 
 /* actions: buttons with data-act, forms with data-form */
@@ -812,10 +1054,14 @@ document.addEventListener('click', (e) => {
     case 'list-tab': setListTab(b.dataset.tab); drawList(); showTicker(); break; // an empty tab clears the stock page too
     case 'star': toggleStar(ticker, b.dataset.on === 'true'); break;
     case 'refresh': run(() => send('POST', '/api/refresh'), 'Fetching new data in the background'); break;
-    case 'mode': setMode(to); state.practice = null; loadPractice().catch(() => {}); location.hash = to === 'practice' ? 'practice' : 'portfolio'; route(); pollStatus(true); break;
+    case 'mode': setMode(to); state.practice = null; loadPractice().catch(() => {}); location.hash = to === 'practice' ? 'practice' : 'home'; route(); pollStatus(true); break;
     case 'advance': advance(b.dataset.step); break;
+    case 'theme': setTheme(to); break;
+    case 'level': setLevel(Number(to)); toast(`Level: ${LEVELS[Number(to) - 1]}. The menu now shows ${views().length} pages.`); break;
+    case 'read': store.set('suspt-read', [...readSet(), id].join(',')); route(); break;
+    case 'pro-sel': state.proSel = ticker; proChart(); break;
     case 'practice-start': setMode('practice'); run(async () => { state.practice = await send('POST', '/api/practice/start', { scenario: b.dataset.scenario }); drawPracticeBar(); pollStatus(true); location.hash = 'watchlist'; }, 'Practice started. Pick a stock and press Buy.'); break;
-    case 'practice-end': if (confirm('End practice and delete the practice account?')) run(async () => { await send('POST', '/api/practice/end'); state.practice = null; setMode('real'); drawPracticeBar(); location.hash = 'portfolio'; }, 'Practice ended'); break;
+    case 'practice-end': if (confirm('End practice and delete the practice account?')) run(async () => { await send('POST', '/api/practice/end'); state.practice = null; setMode('real'); drawPracticeBar(); location.hash = 'home'; }, 'Practice ended'); break;
   }
 });
 
@@ -883,22 +1129,25 @@ $('#status').addEventListener('click', () => {
 });
 
 /* shell */
-const RENDER = { portfolio: viewPortfolio, watchlist: viewWatchlist, journal: viewJournal, signals: viewSignals, orders: viewOrders, screen: viewScreen, settings: viewSettings, practice: viewPractice };
+const RENDER = { home: viewHome, portfolio: viewPortfolio, watchlist: viewWatchlist, journal: viewJournal, rules: viewRules, orders: viewOrders, screen: viewScreen, pro: viewPro, learn: viewLearn, settings: viewSettings, practice: viewPractice };
 
 function drawNav() {
-  $('#nav').innerHTML = VIEWS.map((v, i) => `<a href="#${v}" ${v === state.view ? 'aria-current="page"' : ''} ${v === 'practice' ? 'class="nav-practice"' : ''}><span class="n">0${i + 1}</span>${v}</a>`).join('');
+  const shown = views().includes(state.view) ? views() : [...views(), state.view]; // a link can open a page above your level
+  $('#nav').innerHTML = shown.map((v, i) => `<a href="#${v}" ${v === state.view ? 'aria-current="page"' : ''} ${v === 'practice' ? 'class="nav-practice"' : ''}>${i < 9 ? `<span class="n">0${i + 1}</span>` : ''}${v}</a>`).join('');
   $('#mode').innerHTML = ['real', 'practice'].map((m) => `<button type="button" data-act="mode" data-to="${m}" aria-pressed="${mode === m}">${m}</button>`).join('');
-  const listKeys = state.view === 'watchlist' ? '<span class="hint"><kbd>j/k</kbd>move</span><span class="hint"><kbd>b</kbd>buy</span><span class="hint"><kbd>s</kbd>star</span><span class="hint"><kbd>h</kbd>rule hits</span>' : '';
+  const listKeys = state.view === 'pro' ? '<span class="hint"><kbd>j/k</kbd>move</span><span class="hint"><kbd>b</kbd>buy</span><span class="hint"><kbd>x</kbd>sell</span>'
+    : state.view === 'watchlist' ? '<span class="hint"><kbd>j/k</kbd>move</span><span class="hint"><kbd>b</kbd>buy</span><span class="hint"><kbd>s</kbd>star</span><span class="hint"><kbd>h</kbd>rule hits</span>' : '';
   const filterKey = state.view === 'watchlist' || state.view === 'screen' ? '<span class="hint"><kbd>/</kbd>filter</span>' : '';
-  $('#hints').innerHTML = VIEWS.map((v, i) => `<span class="hint opt"><kbd>${i + 1}</kbd>${v}</span>`).join('') + listKeys + filterKey +
+  $('#hints').innerHTML = `<span class="hint opt"><kbd>1-${Math.min(9, shown.length)}</kbd>pages</span><span class="hint opt"><kbd>:</kbd>command</span>` + listKeys + filterKey +
     (inPractice() && state.practice?.active ? '<span class="hint"><kbd>n</kbd>next day</span><span class="hint"><kbd>w</kbd>week</span><span class="hint"><kbd>m</kbd>month</span>' : '') +
     '<span class="hint"><kbd>?</kbd>help</span>';
 }
 
 async function route() {
-  const [view, arg] = location.hash.slice(1).split('/');
-  if (VIEWS.includes(view) && view !== state.view) state.filter = '';
-  state.view = VIEWS.includes(view) ? view : 'portfolio';
+  const [raw, arg] = location.hash.slice(1).split('/');
+  const view = raw === 'signals' ? 'rules' : raw; // old links
+  if (ALL_VIEWS.includes(view) && view !== state.view) state.filter = '';
+  state.view = ALL_VIEWS.includes(view) ? view : 'home';
   if (inPractice() && !state.practice) await loadPractice().catch(() => {});
   if (inPractice() && !state.practice?.active) state.view = 'practice';
   drawNav();
@@ -925,11 +1174,13 @@ document.addEventListener('keydown', (e) => {
     if (typing) { e.target.blur(); }
     return;
   }
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); openCmd(); return; }
   if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
   if (e.key === '?') { help.hidden = !help.hidden; return; }
   if (!help.hidden) return;
+  if (e.key === ':') { e.preventDefault(); openCmd(); return; }
   const n = Number(e.key);
-  if (n >= 1 && n <= VIEWS.length) { location.hash = VIEWS[n - 1]; return; }
+  if (n >= 1 && n <= Math.min(9, views().length)) { location.hash = views()[n - 1]; return; }
   if (e.key === 'r') { route(); return; }
   if (inPractice() && state.practice?.active && !state.practice.atToday && { n: 1, w: 1, m: 1 }[e.key]) { advance({ n: 'day', w: 'week', m: 'month' }[e.key]); return; }
   if (e.key === 'h' && state.view === 'watchlist') { state.hits = !state.hits; showTicker(); return; }
@@ -940,6 +1191,14 @@ document.addEventListener('keydown', (e) => {
   }
   if (e.key === 'b' && state.view === 'watchlist' && visibleRows().some((r) => r.ticker === state.sel)) { openTrade(state.sel, 'buy').catch((err) => toast(err.message, 'err')); return; }
   if (e.key === '/' && $('#filter')) { e.preventDefault(); $('#filter').focus(); return; }
+  if (state.view === 'pro' && state.pro?.length && ['j', 'k', 'ArrowDown', 'ArrowUp'].includes(e.key)) {
+    e.preventDefault();
+    const at = state.pro.findIndex((t) => t.ticker === state.proSel);
+    state.proSel = state.pro[Math.max(0, Math.min(state.pro.length - 1, at + (e.key === 'j' || e.key === 'ArrowDown' ? 1 : -1)))].ticker;
+    proChart();
+    return;
+  }
+  if (state.view === 'pro' && state.proSel && (e.key === 'b' || e.key === 'x')) { openTrade(state.proSel, e.key === 'b' ? 'buy' : 'sell').catch((err) => toast(err.message, 'err')); return; }
   if (state.view === 'watchlist' && ['j', 'k', 'ArrowDown', 'ArrowUp'].includes(e.key)) {
     e.preventDefault();
     const rows = visibleRows();
@@ -952,6 +1211,9 @@ document.addEventListener('keydown', (e) => {
     showTicker();
   }
 });
+$('#cmd-form').addEventListener('submit', (e) => { e.preventDefault(); runCommand($('#cmd-input').value); });
+$('#cmd-input').addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.stopPropagation(); closeCmd(); } });
+$('#cmd').addEventListener('click', (e) => { if (e.target.id === 'cmd') closeCmd(); });
 $('#help').addEventListener('click', (e) => { if (e.target.id === 'help') e.currentTarget.hidden = true; });
 $('#help-btn').addEventListener('click', () => ($('#help').hidden = false));
 
