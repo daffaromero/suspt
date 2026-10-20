@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"time"
 )
 
@@ -25,9 +27,10 @@ const secCacheTTL = 24 * time.Hour
 var errNotFiler = errors.New("not in SEC ticker list (ETFs and funds usually are not)")
 
 // secGet fetches url with the SEC-required User-Agent and caches the body at cacheDir/name.
+// An empty name skips the cache.
 func secGet(ua, url, name string) ([]byte, error) {
 	path := filepath.Join(cacheDir, name)
-	if fi, err := os.Stat(path); err == nil && time.Since(fi.ModTime()) < secCacheTTL {
+	if fi, err := os.Stat(path); name != "" && err == nil && time.Since(fi.ModTime()) < secCacheTTL {
 		return os.ReadFile(path)
 	}
 	// ponytail: process-wide spacing keeps a single CLI run under SEC's 10 req/s; needs a shared limiter if fetches go concurrent.
@@ -50,8 +53,8 @@ func secGet(ua, url, name string) ([]byte, error) {
 		return nil, fmt.Errorf("%s: %s", url, resp.Status)
 	}
 	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
+	if err != nil || name == "" {
+		return body, err
 	}
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		return nil, err
@@ -114,8 +117,10 @@ func parseFacts(b []byte) ([]fact, error) {
 	return out, nil
 }
 
-// ingestEdgar stores the company's SIC classification and replaces all of its XBRL facts.
-// All facts are kept so the screen can pick concepts later without refetching.
+// ingestEdgar stores the company's SIC classification and, when it has filed a new
+// 10-K/10-Q since the last fetch, replaces its XBRL facts. Only the concepts the screen
+// reads are kept (a few hundred rows per company instead of tens of thousands); after
+// adding to screenConcepts, run `DELETE FROM facts` so the next ingest refetches.
 func ingestEdgar(db *sql.DB, ua, ticker string) (int, error) {
 	cik, err := lookupCIK(ua, ticker)
 	if err != nil {
@@ -127,18 +132,50 @@ func ingestEdgar(db *sql.DB, ua, ticker string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	var sub struct{ Name, SIC, SICDescription string }
+	var sub struct {
+		Name, SIC, SICDescription string
+		Filings                   struct {
+			Recent struct{ Form, FilingDate []string }
+		}
+	}
 	if err := json.Unmarshal(b, &sub); err != nil {
 		return 0, err
 	}
+	if _, err := db.Exec(`INSERT OR REPLACE INTO companies (ticker, cik, name, sic, sic_desc) VALUES (?, ?, ?, ?, ?)`,
+		ticker, cik, sub.Name, sub.SIC, sub.SICDescription); err != nil {
+		return 0, err
+	}
+	latestFiling := ""
+	for i, form := range sub.Filings.Recent.Form {
+		if strings.HasPrefix(form, "10-K") || strings.HasPrefix(form, "10-Q") {
+			if i < len(sub.Filings.Recent.FilingDate) && sub.Filings.Recent.FilingDate[i] > latestFiling {
+				latestFiling = sub.Filings.Recent.FilingDate[i]
+			}
+		}
+	}
+	var stored string
+	if err := db.QueryRow(`SELECT COALESCE(MAX(filed), '') FROM facts WHERE cik = ?`, cik).Scan(&stored); err != nil {
+		return 0, err
+	}
+	if stored != "" && stored >= latestFiling {
+		return 0, nil // nothing new filed
+	}
 
-	b, err = secGet(ua, secBase+"/api/xbrl/companyfacts/"+id+".json", id+"-facts.json")
+	// companyfacts is several MB, so it is not cached on disk; the filing check above
+	// keeps it to one download per new filing.
+	b, err = secGet(ua, secBase+"/api/xbrl/companyfacts/"+id+".json", "")
 	if err != nil {
 		return 0, err
 	}
-	facts, err := parseFacts(b)
+	all, err := parseFacts(b)
 	if err != nil {
 		return 0, err
+	}
+	var facts []fact
+	for _, f := range all {
+		if slices.Contains(screenConcepts, f.Concept) {
+			facts = append(facts, f)
+		}
 	}
 
 	tx, err := db.Begin()
@@ -146,10 +183,6 @@ func ingestEdgar(db *sql.DB, ua, ticker string) (int, error) {
 		return 0, err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`INSERT OR REPLACE INTO companies (ticker, cik, name, sic, sic_desc) VALUES (?, ?, ?, ?, ?)`,
-		ticker, cik, sub.Name, sub.SIC, sub.SICDescription); err != nil {
-		return 0, err
-	}
 	if _, err := tx.Exec(`DELETE FROM facts WHERE cik = ?`, cik); err != nil {
 		return 0, err
 	}

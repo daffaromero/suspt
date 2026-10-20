@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -63,6 +64,8 @@ CREATE TABLE IF NOT EXISTS screens (
 	PRIMARY KEY (ticker, as_of)
 );
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS api_calls (provider TEXT NOT NULL, at INTEGER NOT NULL); -- unix seconds, for rate limits
+CREATE TABLE IF NOT EXISTS index_members (ticker TEXT NOT NULL, fund TEXT NOT NULL, as_of TEXT NOT NULL, weight REAL, PRIMARY KEY (fund, ticker));
 CREATE TABLE IF NOT EXISTS sectors (ticker TEXT PRIMARY KEY, sector TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS watchlist (ticker TEXT PRIMARY KEY, added_on TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS levels (
@@ -125,6 +128,7 @@ const usage = `usage:
   suspt update                                    daily routine: ingest watchlist + holdings + benchmark, screen, replay, signals
   suspt serve [ADDR]                              dashboard (default 127.0.0.1:8484)
 
+  suspt sync-spus                                 refresh SPUS (S&P 500 Shariah) holdings and add them to the watchlist
   suspt watch [TICKER...]                         show the watchlist, or add tickers
   suspt unwatch TICKER...
   suspt level TICKER NAME PRICE|rm                set a key level (usable in rules as level:NAME)
@@ -251,6 +255,8 @@ func main() {
 		err = runSignals(db)
 	case "update":
 		err = runUpdate(db)
+	case "sync-spus":
+		err = runSyncSPUS(db)
 	case "serve":
 		err = runServe(db, args)
 	case "run":
@@ -271,20 +277,42 @@ func runIngest(db *sql.DB, tickers []string) error {
 		return errors.New(usage)
 	}
 	tiingoKey, secUA := mustEnv("TIINGO_API_KEY"), mustEnv("SEC_USER_AGENT")
+	set, err := loadSettings(db)
+	if err != nil {
+		return err
+	}
+	// Fetch the benchmark first: any ticker already at its latest date is current and
+	// skipped, which saves Tiingo's hourly budget (and handles market holidays for free).
+	bench := set["benchmark"]
+	for i := range tickers {
+		tickers[i] = strings.ToUpper(tickers[i])
+	}
+	if i := slices.Index(tickers, bench); i > 0 {
+		tickers[0], tickers[i] = tickers[i], tickers[0]
+	}
+	fresh := ""
 	failed := 0
 	for _, t := range tickers {
-		t = strings.ToUpper(t)
-		if n, err := ingestPrices(db, tiingoKey, t); err != nil {
+		var last sql.NullString
+		db.QueryRow(`SELECT MAX(date) FROM prices WHERE ticker = ?`, t).Scan(&last)
+		if t != bench && fresh != "" && last.String >= fresh {
+			log.Printf("%s prices: up to date", t)
+		} else if n, err := ingestPrices(db, tiingoKey, t); err != nil {
 			log.Printf("%s prices: %v", t, err)
 			failed++
 		} else {
 			log.Printf("%s prices: %d bars", t, n)
+			if t == bench {
+				db.QueryRow(`SELECT COALESCE(MAX(date), '') FROM prices WHERE ticker = ?`, t).Scan(&fresh)
+			}
 		}
 		if n, err := ingestEdgar(db, secUA, t); errors.Is(err, errNotFiler) {
 			log.Printf("%s edgar: skipped, %v", t, err)
 		} else if err != nil {
 			log.Printf("%s edgar: %v", t, err)
 			failed++
+		} else if n == 0 {
+			log.Printf("%s edgar: no new filing", t)
 		} else {
 			log.Printf("%s edgar: %d facts", t, n)
 		}

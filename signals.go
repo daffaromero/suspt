@@ -558,7 +558,10 @@ func runUpdate(db *sql.DB) error {
 	if err := runIngest(db, tickers); err != nil {
 		log.Print(err) // keep going with whatever data we have
 	}
-	if err := runScreen(db, nil); err != nil {
+	if _, err := syncSPUS(db); err != nil {
+		log.Printf("SPUS membership not refreshed: %v", err) // keep the previous list
+	}
+	if err := screenReport(db, nil, true); err != nil {
 		return err
 	}
 	if err := replay(db); err != nil {

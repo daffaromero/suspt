@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func testDB(t *testing.T) *sql.DB {
@@ -59,12 +60,14 @@ func TestIngestEdgar(t *testing.T) {
 		case "/files/company_tickers.json":
 			fmt.Fprint(w, `{"0":{"cik_str":320193,"ticker":"AAPL","title":"Apple Inc."}}`)
 		case "/submissions/CIK0000320193.json":
-			fmt.Fprint(w, `{"name":"Apple Inc.","sic":"3571","sicDescription":"Electronic Computers"}`)
+			fmt.Fprint(w, `{"name":"Apple Inc.","sic":"3571","sicDescription":"Electronic Computers",
+				"filings":{"recent":{"form":["8-K","10-Q"],"filingDate":["2026-09-01","2026-08-01"]}}}`)
 		case "/api/xbrl/companyfacts/CIK0000320193.json":
 			fmt.Fprint(w, `{"cik":320193,"facts":{
 				"dei":{"EntityCommonStockSharesOutstanding":{"units":{"shares":[
 					{"end":"2026-07-18","val":14800000000,"accn":"a1","fy":2026,"fp":"Q3","form":"10-Q","filed":"2026-08-01"}]}}},
-				"us-gaap":{"LongTermDebtNoncurrent":{"units":{"USD":[
+				"us-gaap":{"NotUsedByTheScreen":{"units":{"USD":[{"end":"2026-06-28","val":1,"accn":"a1","form":"10-Q","filed":"2026-08-01"}]}},
+				"LongTermDebtNoncurrent":{"units":{"USD":[
 					{"end":"2026-06-28","val":85000000000,"accn":"a1","fy":2026,"fp":"Q3","form":"10-Q","filed":"2026-08-01"},
 					{"end":"2025-09-27","val":90000000000,"accn":"a0","fy":null,"fp":"FY","form":"10-K","filed":"2025-10-31"}]}}}}}`)
 		default:
@@ -75,17 +78,19 @@ func TestIngestEdgar(t *testing.T) {
 	secBase, secTickersURL, cacheDir = srv.URL, srv.URL+"/files/company_tickers.json", t.TempDir()
 	db := testDB(t)
 
-	for range 2 { // second run hits the file cache and must replace, not duplicate
+	// First run stores the 3 screen facts (not the unused concept); the second sees no
+	// 10-K/10-Q newer than what is stored and skips the multi-MB companyfacts download.
+	for i, want := range []int{3, 0} {
 		n, err := ingestEdgar(db, "test agent", "AAPL")
 		if err != nil {
 			t.Fatal(err)
 		}
-		if n != 3 {
-			t.Fatalf("facts = %d, want 3", n)
+		if n != want {
+			t.Fatalf("run %d: facts = %d, want %d", i+1, n, want)
 		}
 	}
 	if len(uas) != 3 {
-		t.Fatalf("network calls = %d, want 3 (second run should be cached)", len(uas))
+		t.Fatalf("network calls = %d, want 3 (tickers, submissions, companyfacts once)", len(uas))
 	}
 	for _, ua := range uas {
 		if ua != "test agent" {
@@ -118,5 +123,20 @@ func TestLoadDotEnv(t *testing.T) {
 	}
 	if _, set := os.LookupEnv("SUSPT_T_D"); set {
 		t.Error("empty value should not be set")
+	}
+}
+
+func TestTiingoWait(t *testing.T) {
+	db := testDB(t)
+	now := time.Unix(1_800_000_000, 0)
+	for i := range tiingoPerHour {
+		db.Exec(`INSERT INTO api_calls (provider, at) VALUES ('tiingo', ?)`, now.Add(time.Duration(i-tiingoPerHour)*time.Minute/2).Unix())
+	}
+	// 50 calls in the last 25 minutes: wait until the oldest is an hour old.
+	if w, err := tiingoWait(db, now); err != nil || w != 35*time.Minute+time.Second {
+		t.Fatalf("wait = %v, %v; want 35m1s", w, err)
+	}
+	if w, _ := tiingoWait(db, now.Add(36*time.Minute)); w != 0 {
+		t.Fatalf("after the window slides, wait = %v, want 0", w)
 	}
 }

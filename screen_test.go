@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"math"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 )
 
@@ -97,6 +99,41 @@ func TestSICVerdict(t *testing.T) {
 	for sic, want := range map[string]string{"6021": "excluded", "2111": "excluded", "2080": "review", "3571": "ok", "7830": "excluded", "": "review"} {
 		if got := sicVerdict(sic); got != want {
 			t.Errorf("sicVerdict(%q) = %s, want %s", sic, got, want)
+		}
+	}
+}
+
+func TestSyncSPUSAndMembership(t *testing.T) {
+	csvBody := "Date,Account,StockTicker,CUSIP,SecurityName,Shares,Price,MarketValue,Weightings\n" +
+		"10/20/2026,SPUS,Cash&Other,x,Cash,1,1,1,0.10%\n10/20/2026,SPUS,2602335D,x,TPG,1,1,1,0.00%\n10/20/2026,SPUS,BRK.B,x,B,1,1,1,1.00%\n"
+	for i := range 60 {
+		csvBody += fmt.Sprintf("10/20/2026,SPUS,T%c%c,x,Co,1,1,1,0.50%%\n", 'A'+i/26, 'A'+i%26)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, csvBody) }))
+	defer srv.Close()
+	spusHoldingsURL = srv.URL
+	db := testDB(t)
+
+	members, err := syncSPUS(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(members) != 61 || members[0] != "BRK-B" {
+		t.Fatalf("members = %d (first %q), want 61 starting with BRK-B", len(members), members[0])
+	}
+
+	// A SIC-"ok" company outside SPUS needs review; a member does not.
+	for _, tk := range []string{"TAA", "OUT"} {
+		db.Exec(`INSERT INTO companies (ticker, cik, name, sic) VALUES (?, ?, 'x', '3571')`, tk, len(tk)+int(tk[0]))
+		db.Exec(`INSERT INTO prices (ticker, date, open, high, low, close, volume) VALUES (?, '2026-10-20', 1, 1, 1, 1, 1)`, tk)
+	}
+	for tk, want := range map[string]string{"TAA": "ok", "OUT": "review"} {
+		rows, err := screenTicker(db, tk)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := rows[len(rows)-1].Business; got != want {
+			t.Errorf("%s business = %s, want %s", tk, got, want)
 		}
 	}
 }

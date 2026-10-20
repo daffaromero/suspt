@@ -2,10 +2,14 @@ package main
 
 import (
 	"database/sql"
+	"encoding/csv"
 	"errors"
 	"fmt"
+	"io"
 	"math"
+	"net/http"
 	"os"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -411,18 +415,32 @@ func screenTicker(db *sql.DB, ticker string) ([]screenRow, error) {
 
 	var st screenState
 	var rows []screenRow
+	// SPUS membership stands in for S&P's qualitative business review (done by Ratings
+	// Intelligence), which a SIC code can't see: e.g. AMZN and META pass on SIC and ratios
+	// but are not held by SPUS.
+	var spusAsOf, member string
+	db.QueryRow(`SELECT COALESCE(MAX(as_of), '') FROM index_members WHERE fund = 'SPUS'`).Scan(&spusAsOf)
+	db.QueryRow(`SELECT as_of FROM index_members WHERE fund = 'SPUS' AND ticker = ?`, ticker).Scan(&member)
+
 	for i := min(spAvgMonths-1, len(months)-1); i < len(months); i++ {
-		// A manual verdict only applies from the day it was made, so it can't rewrite past
-		// fills. The provisional current month always shows it.
-		business, np := sicVerdict(sic), 0.0
-		if verdict.Valid && (reviewedOn.String <= months[i].Date || i == len(months)-1) {
-			business, np = verdict.String, npFrac
+		// Membership and manual verdicts only apply from the day they were recorded, so they
+		// can't rewrite past fills. The provisional current month always shows them.
+		current := i == len(months)-1
+		business, np, note := sicVerdict(sic), 0.0, ""
+		if business == "review" {
+			note = fmt.Sprintf("SIC %s %s: record a verdict with `suspt review`", sic, sicDesc)
+		}
+		if business == "ok" && spusAsOf != "" && member == "" && (spusAsOf <= months[i].Date || current) {
+			business, note = "review", "not held by SPUS, so S&P's own screen excludes it: check its business or `suspt review`"
+		}
+		if verdict.Valid && (reviewedOn.String <= months[i].Date || current) {
+			business, np, note = verdict.String, npFrac, ""
 		}
 		r, ok := evaluate(facts, months, splits, i, np)
 		row := screenRow{AsOf: months[i].Date, Business: business, ratios: r, Status: "NO_DATA",
-			Provisional: i == len(months)-1 && months[i].Date[:7] >= nyToday()[:7]}
-		if business == "review" {
-			row.Notes = append(row.Notes, fmt.Sprintf("SIC %s %s: record a verdict with `suspt review`", sic, sicDesc))
+			Provisional: current && months[i].Date[:7] >= nyToday()[:7]}
+		if note != "" {
+			row.Notes = append(row.Notes, note)
 		}
 		if ok {
 			st = nextState(st, max(r.Debt, r.Cash))
@@ -473,7 +491,11 @@ func pct(v float64) string {
 	return fmt.Sprintf("%.1f%%", v*100)
 }
 
-func runScreen(db *sql.DB, tickers []string) error {
+func runScreen(db *sql.DB, tickers []string) error { return screenReport(db, tickers, false) }
+
+// screenReport screens tickers (default: every ingested company); brief prints counts
+// and only the tickers that need attention.
+func screenReport(db *sql.DB, tickers []string, brief bool) error {
 	if len(tickers) == 0 {
 		rs, err := db.Query(`SELECT ticker FROM companies ORDER BY ticker`)
 		if err != nil {
@@ -491,15 +513,26 @@ func runScreen(db *sql.DB, tickers []string) error {
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "TICKER\tSTATUS\tDEBT\tCASH\tNPI\tPURIFY\tBUSINESS\tAS OF\tNOTE")
+	counts := map[string]int{}
 	for _, t := range tickers {
 		t = strings.ToUpper(t)
 		rows, err := screenTicker(db, t)
 		if err != nil {
+			counts["ERROR"]++
 			fmt.Fprintf(w, "%s\tERROR\t\t\t\t\t\t\t%v\n", t, err)
 			continue
 		}
 		r := rows[len(rows)-1]
+		counts[r.Status]++
+		if brief && r.Status != "REVIEW" && r.Status != "NO_DATA" {
+			continue
+		}
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", t, r.Status, pct(r.Debt), pct(r.Cash), pct(r.NPI), pct(r.Purif), r.Business, r.AsOf, strings.Join(r.Notes, "; "))
+	}
+	if brief {
+		fmt.Fprintf(w, "\nscreened %d: %d compliant, %d non-compliant, %d review, %d no data, %d errors (full table: suspt screen)\n",
+			len(tickers), counts["COMPLIANT"], counts["NON_COMPLIANT"], counts["REVIEW"], counts["NO_DATA"], counts["ERROR"])
+		return w.Flush()
 	}
 	fmt.Fprintf(w, "\nS&P Shariah (Oct 2026): debt and cash each < %.0f%% of 36-month avg market cap, NPI < %.0f%%.\n", spMaxRatio*100, spMaxNPI*100)
 	return w.Flush()
@@ -521,4 +554,108 @@ func runReview(db *sql.DB, args []string) error {
 	_, err := db.Exec(`INSERT OR REPLACE INTO business_reviews (ticker, verdict, nonpermissible_revenue, note, reviewed_on)
 		VALUES (?, ?, ?, ?, ?)`, strings.ToUpper(args[0]), args[1], pctVal/100, strings.Join(rest, " "), nyToday())
 	return err
+}
+
+var spusHoldingsURL = "https://www.sp-funds.com/wp-content/uploads/data/TidalFG_Holdings_SPUS.csv"
+
+var memberTickerRe = regexp.MustCompile(`^[A-Z]{1,5}([./][A-Z])?$`)
+
+// syncSPUS replaces the SPUS member list from the fund's daily holdings file and
+// returns the members (Tiingo/SEC style tickers, e.g. BRK-B).
+func syncSPUS(db *sql.DB) ([]string, error) {
+	req, err := http.NewRequest("GET", spusHoldingsURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "suspt/0.1 (+https://github.com/daffaromero/suspt)")
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("SPUS holdings: %s", resp.Status)
+	}
+	rows, err := csv.NewReader(io.LimitReader(resp.Body, 5<<20)).ReadAll()
+	if err != nil {
+		return nil, fmt.Errorf("SPUS holdings: %w", err)
+	}
+	if len(rows) < 2 {
+		return nil, errors.New("SPUS holdings: empty file")
+	}
+	col := map[string]int{}
+	for i, h := range rows[0] {
+		col[strings.TrimSpace(h)] = i
+	}
+	for _, h := range []string{"Date", "StockTicker", "Weightings"} {
+		if _, ok := col[h]; !ok {
+			return nil, fmt.Errorf("SPUS holdings: column %q missing, the file format changed", h)
+		}
+	}
+	day, err := time.Parse("1/2/2006", strings.TrimSpace(rows[1][col["Date"]]))
+	if err != nil {
+		return nil, fmt.Errorf("SPUS holdings: bad date: %w", err)
+	}
+	asOf := day.Format(time.DateOnly)
+	var members []string
+	weights := map[string]float64{}
+	for _, r := range rows[1:] {
+		t := strings.TrimSpace(r[col["StockTicker"]])
+		if !memberTickerRe.MatchString(t) { // skips "Cash&Other" and CUSIP placeholders
+			continue
+		}
+		t = strings.NewReplacer(".", "-", "/", "-").Replace(t)
+		w, _ := strconv.ParseFloat(strings.TrimSuffix(strings.TrimSpace(r[col["Weightings"]]), "%"), 64)
+		members, weights[t] = append(members, t), w/100
+	}
+	if len(members) < 50 {
+		return nil, fmt.Errorf("SPUS holdings: only %d tickers parsed, refusing to replace the member list", len(members))
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM index_members WHERE fund = 'SPUS'`); err != nil {
+		return nil, err
+	}
+	for _, t := range members {
+		if _, err := tx.Exec(`INSERT OR REPLACE INTO index_members (ticker, fund, as_of, weight) VALUES (?, 'SPUS', ?, ?)`, t, asOf, weights[t]); err != nil {
+			return nil, err
+		}
+	}
+	return members, tx.Commit()
+}
+
+// runSyncSPUS refreshes SPUS membership and adds every member to the watchlist.
+func runSyncSPUS(db *sql.DB) error {
+	before, err := watchlistTickers(db)
+	if err != nil {
+		return err
+	}
+	members, err := syncSPUS(db)
+	if err != nil {
+		return err
+	}
+	added := 0
+	for _, t := range members {
+		res, err := db.Exec(`INSERT OR IGNORE INTO watchlist (ticker, added_on) VALUES (?, ?)`, t, nyToday())
+		if err != nil {
+			return err
+		}
+		n, _ := res.RowsAffected()
+		added += int(n)
+	}
+	var gone []string
+	for _, t := range before {
+		if !slices.Contains(members, t) {
+			gone = append(gone, t)
+		}
+	}
+	fmt.Printf("SPUS holds %d stocks; %d added to the watchlist\n", len(members), added)
+	if len(gone) > 0 {
+		fmt.Printf("on your watchlist but not in SPUS (kept; screen shows them as REVIEW): %s\n", strings.Join(gone, " "))
+	}
+	fmt.Println("run `suspt update` to fetch their data (Tiingo's 50 requests/hour makes the first run take a few hours)")
+	return nil
 }
