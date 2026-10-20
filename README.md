@@ -2,116 +2,117 @@
 <img width="3024" height="638" alt="image" src="https://github.com/user-attachments/assets/c456a81f-116e-4204-90d1-5c20085110d0" />
 
 A Sharia-compliant US stock tracker. Simulation only: no brokerage, no real orders. Made for learning purposes only.
-One Go binary, one SQLite file: a web app for everything, plus a CLI for terminal users.
 
-## Getting started (no terminal needed)
+suspt gives you pretend money, real US stock prices and a Sharia screen built from companies' own SEC filings. You buy and sell with a written reason for every trade, and suspt shows you, month after month, which of your reasons actually worked and whether you beat simply buying a Sharia index fund.
 
-1. Install Go once from https://go.dev/dl/ (the app builds itself with it).
-2. Download this repo (green **Code** button, **Download ZIP**) and unzip it.
-3. Double-click `Suspt.command`. The first time, macOS may block it because it was downloaded: right-click it, choose **Open**, then **Open** again. It builds the app and opens it in your browser.
-4. Follow **getting started** on the first page: connect the free data sources (a Tiingo account plus your name and email for the SEC), pick stocks, and place your first paper trade.
+![The watchlist in practice mode: NVIDIA in January 2024, with the order that just filled](docs/screenshots/practice-watchlist.png)
 
-Keep the small window that opens: closing it stops the app. While it's open, new prices arrive by themselves after each US market close.
+## What it does
 
-## Decisions
+- **Sharia screen from primary sources.** Every company is screened with the S&P Shariah rules (debt, cash and impure income limits, with S&P's grace buffer), computed from SEC filings. Dow Jones Islamic and AAOIFI Standard 21 are shown side by side for comparison.
+- **Paper trading that stays honest.** Orders fill at a later market open, never at a price you have already seen. Fractional shares, limit and good-till-cancelled orders, fees, dividend tax, splits.
+- **A reason for every trade.** Each order needs a written reason and a short thesis tag. The journal scores every idea by what it really returned, dividends included.
+- **Compliance that acts.** Only compliant stocks can be bought. If one you hold stops being compliant, suspt sells it for you (or warns you, if you prefer).
+- **Purification.** Each dividend's impure share is calculated and set aside automatically.
+- **A fair benchmark.** Your result is compared with SPUS, the S&P 500 Shariah fund, given the same deposits on the same dates.
+- **Rules you can read.** Plain conditions such as `close crosses_above sma200` flag buy ideas; editing a rule keeps its earlier versions. Nothing is a black box.
+- **A time machine.** Practice mode starts an account in the past, shows you only what was known on that day, and lets you fast-forward a day, week or month at a time. Missions walk a new user through it and a report card closes each quarter.
 
-| Topic | Decision |
-|---|---|
-| Sharia standard | S&P Shariah governs buy/sell. Dow Jones Islamic and AAOIFI are shown for comparison. |
-| Capital | $300 starting deposit plus $50 per month (`suspt config` to change). The benchmark receives the same deposits on the same dates. |
-| Benchmark | SPUS (tracks S&P 500 Shariah, same methodology as the governing screen) |
-| Prices | Tiingo free tier (50 req/hour, 1000/day, 500 symbols/month, personal use only) |
-| Fundamentals | SEC EDGAR companyfacts + submissions (10 req/s max, User-Agent required) |
+![Report card after a practice quarter](docs/screenshots/report-card.png)
 
-## Terminal setup
+## Get started (no terminal needed)
 
-```sh
-cp .env.example .env            # fill in TIINGO_API_KEY and SEC_USER_AGENT; suspt reads ./.env itself
-go build -o suspt .
-./suspt watch NVDA AAPL MSFT    # what you follow
-./suspt update                  # fetch, screen, replay, report (run daily after the US close)
-./suspt serve                   # dashboard on http://127.0.0.1:8484
-go test ./...
-```
+1. Install Go once from <https://go.dev/dl/>. suspt builds itself with it.
+2. Download this repository (green **Code** button, **Download ZIP**) and unzip it.
+3. Double-click **`Suspt.command`**. The first time, macOS may block it because it was downloaded: right-click it, choose **Open**, then **Open** again. It builds suspt and opens it in your browser.
+4. Follow **getting started** on the first page: connect the two free data sources, pick stocks, place your first paper trade.
 
-## Daily use
+Keep the small window that opens; closing it stops suspt. While it runs, new prices arrive by themselves after each US market close.
 
-```sh
-./suspt update
-./suspt buy NVDA -usd 50 -reason "AI capex still accelerating" -thesis ai-capex
-./suspt buy AAPL 0.2 -limit 190 -gtc -reason "wait for pullback" -thesis quality
-./suspt sell NVDA all -reason "too concentrated" -thesis risk
-./suspt orders | portfolio | journal | signals
-./suspt level NVDA support 120
-./suspt rule add golden-cross '*' WATCH trend "sma50 crosses_above sma200"
-./suspt review KO excluded 0 "alcohol tie-ins"     # manual business verdict
-./suspt config fee_flat 1                          # broker fees, withholding, limits
-```
+Want to learn first? Press **practice** at the top and pick a starting point, such as *The 2024 AI run-up*.
 
-`./suspt` with no arguments lists every command.
+### Data sources
+
+| | What for | Cost |
+|---|---|---|
+| [Tiingo](https://www.tiingo.com/) | Daily prices, dividends and splits | Free account; 50 requests per hour, personal use only |
+| [SEC EDGAR](https://www.sec.gov/search-filings/edgar-application-programming-interfaces) | Company filings for the Sharia screen | Free; asks for your name and email on every request |
+| [SPUS holdings](https://www.sp-funds.com/spus/) | Which stocks S&P's own Sharia fund holds | Free daily file |
+
+Both keys are entered once on the Settings page and stay in a `.env` file on your computer.
+
+## How the Sharia screen works
+
+![The Sharia screen with all three standards](docs/screenshots/sharia-screen.png)
+
+| | S&P Shariah (decides) | Dow Jones Islamic (compare) | AAOIFI Standard 21 (compare) |
+|---|---|---|---|
+| Debt | under 30% | under 30% | not over 30% |
+| Cash and interest-bearing securities | under 30% | under 30% | not over 30% (deposits) |
+| Measured against | 36-month average market value | 24-month average market value | today's market value |
+| Impure income | under 5% of revenue | under 5% of revenue | not over 5% of income |
+| Grace buffer | 2 points, 3 periods | 2 points, 3 periods | none |
+| Source | [Methodology, Oct 2026](https://www.spglobal.com/spdji/en/documents/methodologies/methodology-sp-shariah-indices.pdf) | [Methodology, Sep 2026](https://www.spglobal.com/spdji/en/documents/methodologies/methodology-dj-islamic-market-indices.pdf) | Clauses 3/4/2 to 3/4/5 via [secondary quotes](https://halal.ninja/what-is-aaoifi); AAOIFI's text is members-only |
+
+- **Rules by date.** S&P and Dow Jones both changed on 18 September 2026; before that the only ratio test was debt under 33%. Every month is judged by the rule in force then, so the grace buffer carries stocks across the change the way the indices do.
+- **No hindsight.** A month's screen only uses filings already published that month. The screen runs monthly; the current month is shown but only counts once it is complete.
+- **Business activity.** Banks, insurers, alcohol, tobacco and similar industries are excluded from the SEC industry code. Ambiguous codes (beverages, restaurants, media) need your verdict, and a stock that S&P's own fund doesn't hold is flagged for review: that catches what an industry code can't see.
+- **Checked against reality.** On SPUS's actual holdings, the S&P screen agrees except where a ratio sits within a point of the limit, because S&P's data provider measures slightly differently from SEC figures. Those cases are labelled.
 
 ## How the simulation works
 
-- **Replay, not state.** Orders and settings are the only inputs; the ledger, lots and equity curve are rebuilt from scratch on every run, so nothing drifts.
-- **Fills.** An order placed on day D (New York date) fills on a later bar: market at the open; limit at the open if already through, else at the limit if the day touched it. Day orders expire after one bar; `-gtc` stays open.
-- **Gate.** A buy only fills if the stock is COMPLIANT on the fill date (or is in `allowed_etfs`).
-- **Compliance sell.** When a held stock turns NON_COMPLIANT, an automatic sell is queued (`compliance_sell`, `compliance_grace_days`).
-- **Splits and dividends** come from Tiingo events. Dividends are credited on the ex-date, minus `dividend_withholding` and the purification share, which is logged as its own ledger line.
-- **Benchmark** receives each deposit and buys at the next open, with the same fee model; its dividends are reinvested.
-- **Returns.** Time-weighted return, so monthly deposits don't count as gains.
-- **Journal.** Each buy is one lot; sells consume lots FIFO, so profit and dividends trace back to the buy's reason and thesis tag.
-- **Concentration.** Flags when one position, one sector, or semiconductors exceed `max_position_pct`, `max_sector_pct`, `max_semis_pct` of holdings. Sector comes from the SIC code (`suspt sector` overrides).
+- Your orders and settings are the only stored inputs. Everything else (fills, holdings, history) is rebuilt from scratch on every run, so it can't drift.
+- An order placed today fills at a later market open: market orders at the open, limit orders when the price is reached.
+- Deposits default to $300 to start plus $50 a month; fees and dividend tax are configurable for your broker.
+- Returns are time-weighted, so deposits don't count as gains. Holdings are tracked lot by lot, oldest first, so each sale's profit traces back to the reason you bought.
 
-## Signals
+## For terminal users
 
-Rules are explicit clauses joined by `and`: terms `open high low close chg smaN level:NAME` or numbers, operators `< <= > >= crosses_above crosses_below`. Editing a rule adds a new version and retires the old one (`suspt rules -all`). Indicators use split-adjusted prices. A BUY signal on a stock that is not COMPLIANT shows as BLOCKED.
+Everything in the app is also a command:
 
-## The app
+```sh
+cp .env.example .env     # add TIINGO_API_KEY and SEC_USER_AGENT
+go build -o suspt .
+./suspt                  # open the app
+./suspt update           # fetch, screen, replay, report
+./suspt buy NVDA -usd 50 -reason "data-center demand keeps growing" -thesis ai-capex
+./suspt sell NVDA all -reason "too concentrated" -thesis risk
+./suspt rule add golden-cross '*' WATCH trend "sma50 crosses_above sma200"
+./suspt screen           # all three standards for every company
+./suspt help             # every command
+```
 
-`suspt` (or `Suspt.command`) starts the app on 127.0.0.1 and opens the browser; `suspt serve` starts it without opening one. Everything the CLI does is in the app: trades with a required reason and thesis, watchlist, key levels, rules, business verdicts, settings and API-key setup. Trades from the app and the CLI go through the same validation.
+## Under the hood
 
-- **Background refresh.** While the app is open it refreshes after each US close (`auto_refresh`), and the top-right button shows progress, including waits for Tiingo's hourly limit. Only one refresh runs at a time, app or terminal.
-- **Local only.** It refuses to listen on anything but loopback (no login yet). Requests must be addressed to localhost (blocks DNS rebinding), and every change needs an `X-Suspt` header that other websites can't send without a CORS preflight the server never approves. API keys are written to `.env` (mode 0600) and never sent back to the browser.
-- **Look.** Styled after getinsomnia.app: navy, monospace, serif numbers, numbered views, keyboard footer. Keys: `1` to `7` views, `j/k` move, `b` buy, `/` filter, `h` rule hits, `?` help. Charts use TradingView Lightweight Charts 4.2.3 (Apache-2.0), vendored in `web/vendor` after checking the npm integrity hash.
+One Go binary and one SQLite file, with no framework and one dependency ([modernc.org/sqlite](https://pkg.go.dev/modernc.org/sqlite)). The web app is plain HTML, CSS and JavaScript embedded in the binary; charts use [TradingView Lightweight Charts](https://github.com/tradingview/lightweight-charts) 4.2.3, vendored after checking its npm integrity hash.
 
-## Sharia screen
+| File | What's in it |
+|---|---|
+| `tiingo.go`, `edgar.go` | Fetching prices and filings, with rate limits and caching |
+| `screen.go` | The three Sharia standards and SPUS membership |
+| `portfolio.go`, `journal.go` | Order engine, replay, benchmark, journal |
+| `signals.go` | Watchlist, price levels, the rule language |
+| `practice.go` | Practice mode (the time machine) |
+| `app.go`, `server.go`, `web/` | The app and its local API |
 
-Source: S&P Shariah Indices Methodology, October 2026 edition (accounting screens changed 2026-09-18).
+```sh
+go test ./...
+```
 
-- Debt / 36-month avg market value of equity < 30%
-- (Cash & deposits + interest-bearing securities) / same < 30%
-- (Non-permissible revenue + all interest income) / (revenue + interest income) < 5%
-- Buffer: a compliant stock within 2pp over the limit stays compliant until 3 consecutive breaches; a non-compliant stock within 2pp under the limit needs 3 consecutive passes
-- Purification ratio: dividends x (non-permissible revenue + interest + non-operating income) / total income
+The tests cover the order engine, the screen's grace buffer and rule history, all three standards, the rule language, the API's security checks, and that practice mode never shows data from after its date.
 
-Dow Jones Islamic (September 2026 edition, shown for comparison only): the same limits, buffer and income test, with the market value averaged over 24 months instead of 36.
+## Privacy and safety
 
-AAOIFI Shari'ah Standard No. 21 (shown for comparison only): interest-bearing debt and interest-taking deposits each not over 30% of today's market value (no averaging), prohibited income not over 5% of total income, from the latest financial statements, with no grace zone. AAOIFI's text is members-only, so clauses 3/4/2 to 3/4/5 come from secondary quotes ([halal.ninja](https://halal.ninja/what-is-aaoifi)) and are unverified. Deposits are approximated by cash plus interest-bearing securities.
+- suspt only listens on your own computer and refuses other addresses until it has a login. Other websites can't send it commands.
+- API keys live in `.env` (readable only by you, never committed, never sent back to the browser).
+- Your data is one file, `data/suspt.db`. Back it up to keep your orders and verdicts.
 
-Rule history: both S&P and Dow Jones changed on 2026-09-18. Before that, the only ratio test was debt under 33% (per both change logs), and that is what older evaluations use, so the 2-point buffer carries stocks across the change exactly as the indices do.
+## Roadmap
 
-Our choices (not in the methodology):
+- A public read-only page, which needs a price source whose license allows public display
+- Exchange holiday calendar
+- AAOIFI column checked against the official text
 
-- Evaluated at every month-end from the 36th month of price history (S&P evaluates monthly); the current month is provisional. Rule versions older than the pre-2026-09-18 one (e.g. S&P's 2023 cash and receivables tests) are not modelled.
-- Checked against SPUS's actual holdings: the screen agrees except where a ratio sits within a point or two of the limit (IBM in October 2026), where S&P's data provider differs slightly from SEC figures. The screen notes those cases.
-- Only filings already filed on the evaluation date are used (no lookahead). Shares are split-adjusted.
-- XBRL concept mapping for debt, cash, securities and interest income is in `screen.go` (`totalDebt`, `cashAndSecurities`, `interestConcepts`).
-- Business activity: SIC code gives `ok` / `excluded` / `review`. Non-permissible revenue (alcohol, pork, etc.) is not in XBRL, so it comes from `suspt review`, and applies from the day it is recorded (it never rewrites past fills).
-- Known gaps: some issuers (AAPL, MSFT) don't tag interest income, so the NPI ratio excludes it (shown in NOTE). XOM's SEC ticker now points to a 2026 holding company with little history. Foreign filers (20-F, e.g. TSM) have no us-gaap facts and show NO_DATA.
+## Disclaimer
 
-## Data
-
-`data/suspt.db` (gitignored) holds everything; back it up to keep orders, reviews and rules.
-
-- Inputs: `orders`, `settings`, `watchlist`, `levels`, `rules`, `business_reviews`, `sectors`
-- Fetched: `prices` (raw OHLC + dividend/split events), `companies`, `facts` (all XBRL facts), EDGAR cache in `data/cache`
-- Derived (rebuilt every run): `screens`, `ledger`, `lots`, `equity`
-
-## Build order
-
-1. ~~Data ingestion~~
-2. ~~Sharia screen + tests~~ (S&P governing; reference standards pending)
-3. ~~Paper portfolio + order engine~~
-4. ~~Journal + benchmark~~
-5. ~~Signals~~
-6. ~~Dashboard + charts~~
+suspt is a learning tool. It is not investment advice and not a religious ruling; consult a qualified scholar for Sharia questions. Index methodologies are summarised from the published documents linked above, which remain the authority.

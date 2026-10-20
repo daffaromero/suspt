@@ -308,7 +308,8 @@ body.practice .mode button[aria-pressed="true"] { background: var(--warning); }
 body.practice .top { border-bottom: 2px solid var(--warning); }
 .practice-bar {
   position: sticky; top: 38px; z-index: 9; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px;
-  padding: 8px 16px; background: rgba(250, 178, 25, 0.12); border-bottom: 1px dashed var(--warning); color: var(--text);
+  padding: 8px 16px; background: linear-gradient(rgba(250, 178, 25, 0.12), rgba(250, 178, 25, 0.12)), var(--bg-deep);
+  border-bottom: 1px dashed var(--warning); color: var(--text);
 }
 .practice-bar[hidden] { display: none; }
 .practice-bar > b { color: var(--warning); text-transform: uppercase; letter-spacing: 0.08em; }
