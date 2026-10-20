@@ -408,7 +408,8 @@ function screenBullets(s) {
       </span><span class="n">${pct(v, 1, false)}${over ? ' ✕' : ''}</span></div>`;
   };
   return `${one('debt', 'interest-bearing debt vs company value', s.debt, 0.3, 0.02)}${one('cash', 'cash and interest-earning investments vs company value', s.cash, 0.3, 0.02)}${one('impure', 'revenue from interest and haram activities', s.npi, 0.05, 0)}
-    <p class="fine">Each bar must stay left of its tick (30%, 30%, 5%); the amber band is S&amp;P's 2-point grace zone. If you get a dividend, give away ${pct(s.purif, 2, false)} of it to purify it.${s.note ? ' ' + esc(s.note) + '.' : ''}</p>`;
+    <p class="fine">Each bar must stay left of its tick (30%, 30%, 5%); the amber band is S&amp;P's 2-point grace zone. If you get a dividend, give away ${pct(s.purif, 2, false)} of it to purify it.${s.note ? ' ' + esc(s.note) + '.' : ''}</p>
+    ${s.djStatus ? `<p class="fine">Dow Jones Islamic, for comparison: ${badge(s.djStatus)} debt ${pct(s.djDebt, 1, false)} · cash ${pct(s.djCash, 1, false)} of the 2-year average value.</p>` : ''}`;
 }
 
 async function viewJournal(main) {
@@ -479,12 +480,12 @@ async function viewScreen(main) {
   const rows = await get('/api/screens');
   main.innerHTML = `${label('01', 's&p shariah screen: latest result per company')}
     <input class="filter" id="filter" placeholder="/ filter" aria-label="Filter companies" value="${esc(state.filter)}">
-    <div class="tbl-wrap"><table><thead><tr><th>stock</th><th>company</th><th>status</th><th class="n" title="interest-bearing debt vs company value">debt</th><th class="n" title="cash and interest-earning investments vs company value">cash</th><th class="n" title="revenue from interest and haram activities">impure</th><th class="n" title="share of dividends to give away">purify</th><th>business</th><th>as of</th><th>note</th><th></th></tr></thead><tbody id="sc"></tbody></table></div>
-    <p class="fine">Debt and cash must each stay under 30% of the company's average value over 3 years; impure income under 5% of revenue (S&amp;P Shariah, October 2026 rules).</p>`;
+    <div class="tbl-wrap"><table><thead><tr><th>stock</th><th>company</th><th>s&amp;p (decides)</th><th title="Dow Jones Islamic, for reference: same rules, company value averaged over 24 months instead of 36">dow jones</th><th class="n" title="interest-bearing debt vs company value">debt</th><th class="n" title="cash and interest-earning investments vs company value">cash</th><th class="n" title="revenue from interest and haram activities">impure</th><th class="n" title="share of dividends to give away">purify</th><th>business</th><th>as of</th><th>note</th><th></th></tr></thead><tbody id="sc"></tbody></table></div>
+    <p class="fine">Debt and cash must each stay under 30% of the company's average value over 3 years; impure income under 5% of revenue (S&amp;P Shariah, October 2026 rules). S&amp;P decides what you can buy; the Dow Jones Islamic column uses the same rules over 2 years (September 2026 rules) and is for comparison only.</p>`;
   const draw = () => {
     const f = state.filter.trim().toUpperCase();
     $('#sc').innerHTML = rows.filter((r) => !f || (r.ticker + ' ' + r.name + ' ' + r.status).toUpperCase().includes(f)).map((r) => `<tr>
-      <td><a href="#watchlist/${esc(r.ticker)}">${esc(r.ticker)}</a></td><td class="muted">${esc(r.name)}</td><td>${badge(r.status)}</td>
+      <td><a href="#watchlist/${esc(r.ticker)}">${esc(r.ticker)}</a></td><td class="muted">${esc(r.name)}</td><td>${badge(r.status)}</td><td>${r.djStatus ? badge(r.djStatus) : '<span class="muted">n/a</span>'}</td>
       <td class="n">${pct(r.debt, 1, false)}</td><td class="n">${pct(r.cash, 1, false)}</td><td class="n">${pct(r.npi, 1, false)}</td><td class="n">${pct(r.purif, 1, false)}</td>
       <td>${esc(r.business)}</td><td>${esc(r.asOf)}</td><td class="wrap">${esc(r.note)}</td>
       <td>${r.business === 'review' ? btn('quick-review', 'Fine', `data-ticker="${esc(r.ticker)}" data-verdict="ok"`, 'small') + ' ' + btn('quick-review', 'Exclude', `data-ticker="${esc(r.ticker)}" data-verdict="excluded"`, 'small danger') : ''}</td></tr>`).join('');

@@ -17,7 +17,7 @@ Keep the small window that opens: closing it stops the app. While it's open, new
 
 | Topic | Decision |
 |---|---|
-| Sharia standard | S&P Shariah governs buy/sell. AAOIFI and Dow Jones Islamic reference columns are pending their source documents. |
+| Sharia standard | S&P Shariah governs buy/sell. Dow Jones Islamic is shown for comparison. AAOIFI is pending its source document (members-only). |
 | Capital | $300 starting deposit plus $50 per month (`suspt config` to change). The benchmark receives the same deposits on the same dates. |
 | Benchmark | SPUS (tracks S&P 500 Shariah, same methodology as the governing screen) |
 | Prices | Tiingo free tier (50 req/hour, 1000/day, 500 symbols/month, personal use only) |
@@ -84,9 +84,14 @@ Source: S&P Shariah Indices Methodology, October 2026 edition (accounting screen
 - Buffer: a compliant stock within 2pp over the limit stays compliant until 3 consecutive breaches; a non-compliant stock within 2pp under the limit needs 3 consecutive passes
 - Purification ratio: dividends x (non-permissible revenue + interest + non-operating income) / total income
 
+Dow Jones Islamic (September 2026 edition, shown for comparison only): the same limits, buffer and income test, with the market value averaged over 24 months instead of 36.
+
+Rule history: both methodologies changed on 2026-09-18. Before that, the only ratio test was debt under 33% (per both change logs), and that is what older evaluations use, so the 2-point buffer carries stocks across the change exactly as the indices do.
+
 Our choices (not in the methodology):
 
-- Evaluated at every month-end from the 36th month of price history (S&P evaluates monthly); the current month is provisional. The current rules are applied to all history, including before 2026-09-18.
+- Evaluated at every month-end from the 36th month of price history (S&P evaluates monthly); the current month is provisional. Rule versions older than the pre-2026-09-18 one (e.g. S&P's 2023 cash and receivables tests) are not modelled.
+- Checked against SPUS's actual holdings: the screen agrees except where a ratio sits within a point or two of the limit (IBM in October 2026), where S&P's data provider differs slightly from SEC figures. The screen notes those cases.
 - Only filings already filed on the evaluation date are used (no lookahead). Shares are split-adjusted.
 - XBRL concept mapping for debt, cash, securities and interest income is in `screen.go` (`totalDebt`, `cashAndSecurities`, `interestConcepts`).
 - Business activity: SIC code gives `ok` / `excluded` / `review`. Non-permissible revenue (alcohol, pork, etc.) is not in XBRL, so it comes from `suspt review`, and applies from the day it is recorded (it never rewrites past fills).

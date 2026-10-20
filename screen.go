@@ -17,15 +17,19 @@ import (
 	"time"
 )
 
-// S&P Shariah Indices Methodology, October 2026 edition. The accounting screens
-// changed on 2026-09-18 (33% -> 30%, receivables test dropped); the current
-// rules are applied to all history.
+// S&P Shariah Indices Methodology, October 2026 edition, and Dow Jones Islamic Market
+// Indices Methodology, September 2026 edition. Both changed their accounting screens on
+// 2026-09-18 (after close); see accountingRule.
 const (
-	spMaxRatio  = 0.30 // debt and cash, each over 36-month average market value of equity
 	spBuffer    = 0.02 // two percentage points
 	spStreak    = 3    // consecutive evaluation periods inside the buffer before status flips
 	spMaxNPI    = 0.05 // (non-permissible + all interest income) / total business income
 	spAvgMonths = 36
+
+	// Dow Jones Islamic Market Indices Methodology, September 2026 edition: the same
+	// limits, buffer and income test, with market cap averaged over 24 months. Shown for
+	// reference; S&P decides what can be bought.
+	djAvgMonths = 24
 )
 
 // The methodology does not define these line items in XBRL terms. Mapping to
@@ -250,6 +254,7 @@ func splitFactor(splits []bar, after, upto string) float64 {
 
 type ratios struct {
 	Debt, Cash, NPI, Purif float64 // NaN when unknown
+	DJDebt, DJCash         float64 // against the 24-month average, for the Dow Jones reference
 	Notes                  []string
 }
 
@@ -258,16 +263,23 @@ type ratios struct {
 func evaluate(all []sfact, months, splits []bar, i int, npFrac float64) (ratios, bool) {
 	d := months[i].Date
 	b := book(all).known(d)
-	r := ratios{Debt: math.NaN(), Cash: math.NaN(), NPI: math.NaN(), Purif: math.NaN()}
+	r := ratios{Debt: math.NaN(), Cash: math.NaN(), NPI: math.NaN(), Purif: math.NaN(), DJDebt: math.NaN(), DJCash: math.NaN()}
 
-	var sum float64
-	n := 0
+	// Monthly market caps, newest last; S&P averages 36 of them, Dow Jones 24.
+	var caps []float64
 	for _, m := range months[max(0, i-spAvgMonths+1) : i+1] {
 		if sh, end, ok := b.sharesAt(m.Date); ok {
-			sum += m.Close * sh * splitFactor(splits, end, m.Date)
-			n++
+			caps = append(caps, m.Close*sh*splitFactor(splits, end, m.Date))
 		}
 	}
+	avg := func(xs []float64) float64 {
+		s := 0.0
+		for _, x := range xs {
+			s += x
+		}
+		return s / float64(len(xs))
+	}
+	n := len(caps)
 	bd := b.latestEnd([]string{"Assets"}, false)
 	if n == 0 || bd == "" {
 		r.Notes = append(r.Notes, "no shares or balance sheet filed yet")
@@ -276,7 +288,7 @@ func evaluate(all []sfact, months, splits []bar, i int, npFrac float64) (ratios,
 	if n < spAvgMonths {
 		r.Notes = append(r.Notes, fmt.Sprintf("market cap avg over %d/%d months", n, spAvgMonths))
 	}
-	mve := sum / float64(n)
+	mve, djMVE := avg(caps), avg(caps[max(0, n-djAvgMonths):])
 
 	get := func(c string) (float64, bool) { return b.value(c, bd, false) }
 	debt, ok := totalDebt(get)
@@ -288,6 +300,7 @@ func evaluate(all []sfact, months, splits []bar, i int, npFrac float64) (ratios,
 		r.Notes = append(r.Notes, "no cash tagged (assumed 0)")
 	}
 	r.Debt, r.Cash = debt/mve, cash/mve
+	r.DJDebt, r.DJCash = debt/djMVE, cash/djMVE
 
 	fy := b.latestEnd(revenueConcepts, true)
 	if fy == "" {
@@ -316,7 +329,27 @@ type screenState struct {
 
 // nextState applies the S&P buffer to the worst accounting ratio: status flips on a
 // clear breach or clear pass, or after spStreak consecutive periods inside the buffer.
-func nextState(prev screenState, worst float64) screenState {
+// accountingRule is the ratio limit in force on an evaluation date and whether the cash
+// test applies. Both change logs give the rule before 2026-09-18 as debt alone under 33%.
+// ASSUMPTION: that rule is used for all earlier history; versions before it (e.g. S&P's
+// 2023 cash and receivables tests) are not modelled.
+func accountingRule(date string) (limit float64, cashTested bool) {
+	if date > "2026-09-18" {
+		return 0.30, true
+	}
+	return 0.33, false
+}
+
+// worstRatio is the ratio that counts against the limit on date.
+func worstRatio(date string, debt, cash float64) (worst, limit float64) {
+	limit, cashTested := accountingRule(date)
+	if cashTested {
+		return max(debt, cash), limit
+	}
+	return debt, limit
+}
+
+func nextState(prev screenState, worst, spMaxRatio float64) screenState {
 	switch {
 	case !prev.Known:
 		return screenState{Known: true, Compliant: worst < spMaxRatio}
@@ -346,6 +379,7 @@ type screenRow struct {
 	ratios
 	Streak      int
 	Provisional bool // current month: shown, but never gates fills until the month is final
+	DJStatus    string
 }
 
 func screenTicker(db *sql.DB, ticker string) ([]screenRow, error) {
@@ -413,7 +447,7 @@ func screenTicker(db *sql.DB, ticker string) ([]screenRow, error) {
 		return nil, fmt.Errorf("no prices, run ingest first")
 	}
 
-	var st screenState
+	var st, dj screenState
 	var rows []screenRow
 	// SPUS membership stands in for S&P's qualitative business review (done by Ratings
 	// Intelligence), which a SIC code can't see: e.g. AMZN and META pass on SIC and ratios
@@ -443,8 +477,16 @@ func screenTicker(db *sql.DB, ticker string) ([]screenRow, error) {
 			row.Notes = append(row.Notes, note)
 		}
 		if ok {
-			st = nextState(st, max(r.Debt, r.Cash))
+			worst, limit := worstRatio(months[i].Date, r.Debt, r.Cash)
+			st = nextState(st, worst, limit)
 			row.Status, row.Streak = status(business, r, st), st.Streak
+			// Same business verdict and income test; only the averaging window differs.
+			worst, limit = worstRatio(months[i].Date, r.DJDebt, r.DJCash)
+			dj = nextState(dj, worst, limit)
+			row.DJStatus = status(business, r, dj)
+			if current && member != "" && business != "excluded" && row.Status == "NON_COMPLIANT" {
+				row.Notes = append(row.Notes, "S&P's own fund (SPUS) holds it: its data puts the ratios slightly lower than ours near the limit")
+			}
 		}
 		rows = append(rows, row)
 	}
@@ -458,9 +500,10 @@ func screenTicker(db *sql.DB, ticker string) ([]screenRow, error) {
 		return nil, err
 	}
 	for _, r := range rows {
-		if _, err := tx.Exec(`INSERT INTO screens (ticker, as_of, status, business, debt_ratio, cash_ratio, npi_ratio, purification_ratio, streak, note, provisional)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			ticker, r.AsOf, r.Status, r.Business, nullable(r.Debt), nullable(r.Cash), nullable(r.NPI), nullable(r.Purif), r.Streak, strings.Join(r.Notes, "; "), r.Provisional); err != nil {
+		if _, err := tx.Exec(`INSERT INTO screens (ticker, as_of, status, business, debt_ratio, cash_ratio, npi_ratio, purification_ratio, streak, note, provisional, dj_status, dj_debt_ratio, dj_cash_ratio)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), ?, ?)`,
+			ticker, r.AsOf, r.Status, r.Business, nullable(r.Debt), nullable(r.Cash), nullable(r.NPI), nullable(r.Purif), r.Streak, strings.Join(r.Notes, "; "), r.Provisional,
+			r.DJStatus, nullable(r.DJDebt), nullable(r.DJCash)); err != nil {
 			return nil, err
 		}
 	}
@@ -512,14 +555,14 @@ func screenReport(db *sql.DB, tickers []string, brief bool) error {
 		rs.Close()
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "TICKER\tSTATUS\tDEBT\tCASH\tNPI\tPURIFY\tBUSINESS\tAS OF\tNOTE")
+	fmt.Fprintln(w, "TICKER\tSTATUS\tDOW JONES\tDEBT\tCASH\tNPI\tPURIFY\tBUSINESS\tAS OF\tNOTE")
 	counts := map[string]int{}
 	for _, t := range tickers {
 		t = strings.ToUpper(t)
 		rows, err := screenTicker(db, t)
 		if err != nil {
 			counts["ERROR"]++
-			fmt.Fprintf(w, "%s\tERROR\t\t\t\t\t\t\t%v\n", t, err)
+			fmt.Fprintf(w, "%s\tERROR\t\t\t\t\t\t\t\t%v\n", t, err)
 			continue
 		}
 		r := rows[len(rows)-1]
@@ -527,14 +570,14 @@ func screenReport(db *sql.DB, tickers []string, brief bool) error {
 		if brief && r.Status != "REVIEW" && r.Status != "NO_DATA" {
 			continue
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", t, r.Status, pct(r.Debt), pct(r.Cash), pct(r.NPI), pct(r.Purif), r.Business, r.AsOf, strings.Join(r.Notes, "; "))
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", t, r.Status, orDefault(r.DJStatus, "-"), pct(r.Debt), pct(r.Cash), pct(r.NPI), pct(r.Purif), r.Business, r.AsOf, strings.Join(r.Notes, "; "))
 	}
 	if brief {
 		fmt.Fprintf(w, "\nscreened %d: %d compliant, %d non-compliant, %d review, %d no data, %d errors (full table: suspt screen)\n",
 			len(tickers), counts["COMPLIANT"], counts["NON_COMPLIANT"], counts["REVIEW"], counts["NO_DATA"], counts["ERROR"])
 		return w.Flush()
 	}
-	fmt.Fprintf(w, "\nS&P Shariah (Oct 2026): debt and cash each < %.0f%% of 36-month avg market cap, NPI < %.0f%%.\n", spMaxRatio*100, spMaxNPI*100)
+	fmt.Fprintf(w, "\nS&P Shariah (Oct 2026): debt and cash each < 30%% of 36-month avg market cap (debt < 33%% before 2026-09-18), NPI < %.0f%%. Dow Jones: same, 24-month average.\n", spMaxNPI*100)
 	return w.Flush()
 }
 

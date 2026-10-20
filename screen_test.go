@@ -29,7 +29,7 @@ func TestNextState(t *testing.T) {
 	for _, tt := range tests {
 		s := tt.start
 		for _, w := range tt.worst {
-			s = nextState(s, w)
+			s = nextState(s, w, 0.30)
 		}
 		if s.Compliant != tt.want {
 			t.Errorf("%s: compliant = %v, want %v (state %+v)", tt.name, s.Compliant, tt.want, s)
@@ -135,5 +135,50 @@ func TestSyncSPUSAndMembership(t *testing.T) {
 		if got := rows[len(rows)-1].Business; got != want {
 			t.Errorf("%s business = %s, want %s", tk, got, want)
 		}
+	}
+}
+
+func TestDowJonesWindow(t *testing.T) {
+	// 12 months at 20 then 24 at 10, 100 shares: S&P averages 36 months (1333.33),
+	// Dow Jones only the last 24 (1000), so the same $250 of debt reads higher for Dow Jones.
+	var months []bar
+	for m := range 36 {
+		px := 10.0
+		if m < 12 {
+			px = 20
+		}
+		months = append(months, bar{Date: fmt.Sprintf("%d-%02d-28", 2023+m/12, m%12+1), Close: px, Split: 1})
+	}
+	facts := []sfact{
+		{Concept: "EntityCommonStockSharesOutstanding", End: "2022-12-31", Filed: "2023-01-15", Val: 100},
+		{Concept: "Assets", End: "2025-09-30", Filed: "2025-10-30", Val: 1},
+		{Concept: "LongTermDebt", End: "2025-09-30", Filed: "2025-10-30", Val: 250},
+	}
+	r, ok := evaluate(facts, months, nil, len(months)-1, 0)
+	if !ok || !near(r.Debt, 250/(48000.0/36)) || !near(r.DJDebt, 0.25) {
+		t.Fatalf("S&P debt %v (want %v), Dow Jones debt %v (want 0.25)", r.Debt, 250/(48000.0/36), r.DJDebt)
+	}
+}
+
+// Regression: IBM and EXPE are held by SPUS but screened NON_COMPLIANT because the
+// October 2026 limits (30%, cash test) were applied to history that ran under 33%.
+func TestRuleChangeUsesBuffer(t *testing.T) {
+	if l, cash := accountingRule("2026-08-31"); l != 0.33 || cash {
+		t.Errorf("before the change: %v, %v; want 0.33 without cash test", l, cash)
+	}
+	if l, cash := accountingRule("2026-09-30"); l != 0.30 || !cash {
+		t.Errorf("after the change: %v, %v; want 0.30 with cash test", l, cash)
+	}
+	// Debt 31% for years: compliant under 33%, then inside the 2-point buffer after the
+	// switch, so it stays compliant for two more periods and flips on the third.
+	var s screenState
+	var got []bool
+	for _, d := range []string{"2026-07-31", "2026-08-31", "2026-09-30", "2026-10-30", "2026-11-30"} {
+		w, l := worstRatio(d, 0.31, 0.05)
+		s = nextState(s, w, l)
+		got = append(got, s.Compliant)
+	}
+	if fmt.Sprint(got) != "[true true true true false]" {
+		t.Errorf("compliance over the rule change = %v, want [true true true true false]", got)
 	}
 }
