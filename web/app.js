@@ -249,7 +249,7 @@ function setListTab(tab) {
   try { localStorage.setItem(`suspt-list-${mode}`, tab); } catch { /* storage blocked */ }
 }
 
-async function viewWatchlist(main, ticker) {
+async function viewWatchlist(main, ticker, navigated) {
   const [rows, st] = await Promise.all([get('/api/watchlist'), get('/api/status')]);
   state.data.watch = rows;
   state.keys = st.keys;
@@ -262,10 +262,13 @@ async function viewWatchlist(main, ticker) {
   }
   state.list = listTab(rows);
   // The selection is a ticker, never a list position: positions shift when the filter changes.
-  if (ticker && rows.some((r) => r.ticker === ticker)) {
+  // A link (navigation) must show what it names, even if that means clearing the filter or
+  // leaving the shortlist tab; a re-render after an action keeps the tab and filter as they are.
+  const shown = () => visibleRows().some((r) => r.ticker === ticker);
+  if (ticker && rows.some((r) => r.ticker === ticker) && (navigated || shown())) {
     state.sel = ticker;
-    if (!visibleRows().some((r) => r.ticker === ticker)) state.filter = ''; // a link must show what it names
-    if (!visibleRows().some((r) => r.ticker === ticker)) state.list = 'all';
+    if (!shown()) state.filter = '';
+    if (!shown()) state.list = 'all';
   } else if (!rows.some((r) => r.ticker === state.sel && r.date)) {
     state.sel = (rows.find((r) => r.date) || rows[0]).ticker; // start on a ticker that has data
   }
@@ -899,7 +902,9 @@ async function route() {
   clearCharts();
   const main = $('#view');
   try {
-    await RENDER[state.view](main, arg && decodeURIComponent(arg).toUpperCase());
+    const navigated = state.navigated;
+    state.navigated = false;
+    await RENDER[state.view](main, arg && decodeURIComponent(arg).toUpperCase(), navigated);
   } catch (e) {
     main.innerHTML = `<p class="flag">${esc(e.message)}</p><p class="muted">Is the app still running? Start it again with Suspt.command.</p>`;
   }
@@ -973,7 +978,8 @@ function tick() {
   el.innerHTML = `<span class="dot"></span>US market closed · opens in ${hms(wait)}`;
 }
 
-window.addEventListener('hashchange', route);
+state.navigated = true; // opening the page counts as following a link
+window.addEventListener('hashchange', () => { state.navigated = true; route(); });
 setInterval(tick, 1000);
 tick();
 setMode(mode);
