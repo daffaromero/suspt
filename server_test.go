@@ -146,3 +146,19 @@ func TestWriteEnvAndSession(t *testing.T) {
 		}
 	}
 }
+
+// Regression: ISSUE-004: refresh without API keys said "fetching" and failed silently
+// Found by /qa on 2026-10-20
+// Report: .gstack/qa-reports/qa-report-127-0-0-1-2026-10-20.md
+func TestRefreshWithoutKeysIsRefused(t *testing.T) {
+	t.Setenv("TIINGO_API_KEY", "")
+	t.Setenv("SEC_USER_AGENT", "")
+	a := &app{db: testDB(t), dbPath: filepath.Join(t.TempDir(), "x.db")}
+	err := a.startRefresh("manual")
+	if err == nil || !strings.Contains(err.Error(), "data sources") {
+		t.Fatalf("startRefresh without keys: %v, want a 'connect the data sources' error", err)
+	}
+	if a.status()["job"].(jobStatus).Running {
+		t.Fatal("a refresh job started without keys")
+	}
+}
