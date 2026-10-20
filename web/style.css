@@ -19,8 +19,8 @@
   --s1: #b38a00; /* portfolio, sma50 */
   --s2: #7684f2; /* benchmark, sma200 */
   --up: #3fd68f;   /* candles: up hollow, down filled */
-  --down: #ff7a6b;
-  --good: #0ca30c;
+  --down: #ff8a7d; /* 4.9:1 on a selected row */
+  --good: #33c25a;
   --warning: #fab219;
   --serious: #ec835a;
   --critical: #e05454;
@@ -41,18 +41,18 @@
   --raise-2: rgba(27, 31, 59, 0.08);
   --text: #1b1f3b;
   --muted: #4a5078;
-  --faint: #5f6590; /* 5.0:1 on --bg */
+  --faint: #535985; /* 4.8:1 on the darkest row */
   --line: rgba(27, 31, 59, 0.24);
   --grid: rgba(27, 31, 59, 0.08);
-  --accent: #8a5a00;
+  --accent: #7f5300;
   --s1: #b07a00;
   --s2: #4a55d6;
-  --up: #0f7b45;
-  --down: #c2352b;
-  --good: #0f7b45;
-  --warning: #915e00;
-  --serious: #a35a1e;
-  --critical: #c2352b;
+  --up: #0a6638;
+  --down: #a82a20;
+  --good: #0a6638;
+  --warning: #7f5300;
+  --serious: #8f4c17;
+  --critical: #a82a20;
   --danger-text: #b3261e;
   --top-bg: rgba(244, 243, 238, 0.9);
   --backdrop: rgba(27, 31, 59, 0.45);
