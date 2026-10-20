@@ -31,18 +31,31 @@ const label = (n, text) => `<h2 class="section-label"><span class="num">${n}</sp
 const empty = (html) => `<p class="empty">${html}</p>`;
 const btn = (act, text, attrs = '', cls = '') => `<button type="button" class="btn ${cls}" data-act="${act}" ${attrs}>${text}</button>`;
 
-const VIEWS = ['portfolio', 'watchlist', 'journal', 'signals', 'orders', 'screen', 'settings'];
-const state = { view: 'portfolio', sel: '', filter: '', charts: [], data: {}, range: '1Y', hits: false, status: null };
+const VIEWS = ['portfolio', 'watchlist', 'journal', 'signals', 'orders', 'screen', 'settings', 'practice'];
+const state = { view: 'portfolio', sel: '', filter: '', charts: [], data: {}, range: '1Y', hits: false, status: null, practice: null };
+
+// Practice ("time machine") is a separate account; every request says which one it means.
+let mode = 'real';
+try { mode = localStorage.getItem('suspt-mode') === 'practice' ? 'practice' : 'real'; } catch { /* storage blocked */ }
+const inPractice = () => mode === 'practice';
+const modeHeader = () => (inPractice() ? { 'X-Suspt-Mode': 'practice' } : {});
+function setMode(m) {
+  mode = m;
+  try { localStorage.setItem('suspt-mode', m); } catch { /* storage blocked */ }
+  document.body.classList.toggle('practice', inPractice());
+  state.sel = '';
+  state.filter = '';
+}
 
 async function get(path) {
-  const r = await fetch(path, { headers: { Accept: 'application/json' } });
+  const r = await fetch(path, { headers: { Accept: 'application/json', ...modeHeader() } });
   if (!r.ok) throw new Error(`${path}: ${r.status} ${(await r.text()).trim()}`);
   return r.json();
 }
 async function send(method, path, body) {
   const r = await fetch(path, {
     method,
-    headers: { 'Content-Type': 'application/json', 'X-Suspt': '1' },
+    headers: { 'Content-Type': 'application/json', 'X-Suspt': '1', ...modeHeader() },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const text = (await r.text()).trim();
@@ -139,7 +152,7 @@ function checklist(st, hasTrades) {
 /* views */
 async function viewPortfolio(main) {
   const [s, st, orders] = await Promise.all([get('/api/summary'), get('/api/status'), get('/api/orders')]);
-  const intro = checklist(st, orders.length > 0);
+  const intro = inPractice() ? await practicePanel() : checklist(st, orders.length > 0);
   const waiting = waitingOrders(orders);
   if (!s.asOf) {
     main.innerHTML = intro + label('01', 'portfolio') + waiting + empty('The simulation starts after the first market day with data. Your starting cash appears here then.');
@@ -218,7 +231,7 @@ async function viewPortfolio(main) {
 }
 
 const NO_KEYS = 'The data sources aren\'t connected yet, so nothing can be fetched.';
-const fetchNote = (n) => (state.keys === false
+const fetchNote = (n) => (inPractice() ? `${n} added.` : state.keys === false
   ? `${n} added. ${NO_KEYS} Connect them in Settings.`
   : `${n} added. Their data arrives in the background.`);
 
@@ -541,6 +554,90 @@ async function viewSettings(main) {
     </div>`;
 }
 
+/* practice: the time machine */
+const longDate = (d) => new Date(`${d}T12:00:00`).toLocaleDateString('en-US', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+
+async function loadPractice() {
+  state.practice = await get('/api/practice');
+  drawPracticeBar();
+  return state.practice;
+}
+
+function drawPracticeBar() {
+  const p = state.practice;
+  const bar = $('#practice-bar');
+  if (!inPractice()) { bar.hidden = true; return; }
+  bar.hidden = false;
+  if (!p?.active) {
+    bar.innerHTML = `<b>practice</b><span>pick a starting point to step back in time</span><span class="spacer"></span>${btn('mode', 'Back to my real account', 'data-to="real"', 'small quiet')}`;
+    return;
+  }
+  const done = p.missions.filter((m) => m.done).length;
+  bar.innerHTML = `<b>practice</b><span class="pdate">${esc(longDate(p.clock))}</span>
+    ${p.atToday ? '<span class="muted">you have reached today</span>' : ['day', 'week', 'month'].map((st) => btn('advance', `next ${st}`, `data-step="${st}"`, 'small')).join(' ')}
+    <a href="#practice" class="muted">missions ${done}/${p.missions.length}</a>
+    <span class="spacer"></span>${btn('mode', 'Back to my real account', 'data-to="real"', 'small quiet')}`;
+}
+
+// practicePanel is the practice portfolio's top section: missions, then the report card.
+async function practicePanel() {
+  const p = state.practice || (await loadPractice());
+  if (!p.active) return '';
+  const next = p.missions.find((m) => !m.done);
+  return `${label('00', `practice since ${longDate(p.start)}`)}
+    <ol class="steps missions">${p.missions.map((m) => `<li class="${m.done ? 'done' : ''}${m === next ? ' next' : ''}"><span class="tick" aria-hidden="true">${m.done ? '✓' : '○'}</span>
+      <div><b>${esc(m.title)}</b>${m === next ? `<p>${esc(m.hint)}</p>` : ''}</div></li>`).join('')}</ol>
+    ${p.missions.every((m) => m.done) || p.missions.find((m) => m.id === 'quarter')?.done ? await reportCard() : ''}`;
+}
+
+async function reportCard() {
+  const [s, j] = await Promise.all([get('/api/summary'), get('/api/journal')]);
+  const vs = s.twr - s.benchTwr;
+  const best = j.theses[0], worst = j.theses[j.theses.length - 1];
+  return `${label('★', 'report card')}
+    <div class="panel report">
+      <p class="big-line">You ${s.twr >= 0 ? 'made' : 'lost'} <b class="${dir(s.twr)}">${pct(s.twr, 1)}</b>; simply buying ${esc(s.benchmark)} would have made <b>${pct(s.benchTwr, 1)}</b>.
+        That's <b class="${dir(vs)}">${(vs > 0 ? '+' : '') + (vs * 100).toFixed(1)} points</b> ${vs >= 0 ? 'ahead' : 'behind'}.</p>
+      ${best ? `<p>Best idea: <b>${esc(best.thesis)}</b> (${pct(best.return)} on ${best.trades} trade${best.trades > 1 ? 's' : ''}).${worst && worst !== best ? ` Weakest: <b>${esc(worst.thesis)}</b> (${pct(worst.return)}).` : ''}</p>` : '<p>No trades filled, so there is nothing to score yet.</p>'}
+      <p class="fine">Beating the fund over one quarter is mostly luck; what matters is whether your reasons held up. Read them again in the journal, then try another starting point.</p>
+      <p>${btn('go', 'Open the journal', 'data-to="journal"')} ${btn('go', 'Try another starting point', 'data-to="practice"')}</p>
+    </div>`;
+}
+
+async function viewPractice(main) {
+  const p = await loadPractice();
+  const intro = `<p class="lede">Practice is a separate account that starts in the past. You only see what was known on the practice date: prices, filings and screen results stop there. Trade as usual, then press <b>next day</b>, <b>next week</b> or <b>next month</b> to see what happened. Your real account isn't touched.</p>`;
+  const cards = `<div class="scenarios">${p.scenarios.map((sc) => `<div class="panel scenario">
+      <h3>${esc(sc.title)}</h3><p class="muted">${esc(longDate(sc.start))}</p><p>${esc(sc.blurb)}</p>
+      ${btn('practice-start', p.active ? 'Start over here' : 'Start here', `data-scenario="${esc(sc.id)}"`, 'primary')}</div>`).join('')}
+    <form class="panel scenario" data-form="practice-custom">
+      <h3>Pick your own date</h3><p class="muted">${esc(longDate(p.earliest))} to ${esc(longDate(p.latest))}</p>
+      <p>Start anywhere in that range with the same eight large compliant companies.</p>
+      <input type="date" name="date" min="${esc(p.earliest)}" max="${esc(p.latest)}" required aria-label="Practice start date">
+      <button class="btn" type="submit">${p.active ? 'Start over here' : 'Start here'}</button></form></div>`;
+  if (!p.active) {
+    main.innerHTML = `${label('01', 'practice: step back in time')}${intro}${cards}`;
+    return;
+  }
+  main.innerHTML = `${label('01', 'practice')}${intro}${await practicePanel()}
+    ${label('02', 'start somewhere else')}<p class="fine">Starting again replaces this practice account.</p>${cards}
+    <p>${btn('practice-end', 'End practice and delete it', '', 'danger small')}</p>`;
+}
+
+async function advance(step) {
+  const before = new Map((await get('/api/orders')).map((o) => [o.id, o.status]));
+  try {
+    state.practice = await send('POST', '/api/practice/advance', { step });
+  } catch (e) { toast(e.message, 'err'); return; }
+  const after = await get('/api/orders');
+  const news = after.filter((o) => before.get(o.id) === 'open' && o.status !== 'open')
+    .map((o) => `#${o.id} ${o.side} ${o.ticker} ${o.status}${o.status === 'filled' ? ` at ${money(o.price)}` : ''}`);
+  toast(`Now ${longDate(state.practice.clock)}.${news.length ? ' ' + news.join('; ') + '.' : ''}`, 'ok', 8000);
+  drawPracticeBar();
+  pollStatus(true);
+  route();
+}
+
 /* trade ticket */
 async function openTrade(ticker, side) {
   const [d, j] = await Promise.all([get(`/api/ticker/${encodeURIComponent(ticker)}`), get('/api/journal').catch(() => ({ theses: [] }))]);
@@ -651,6 +748,10 @@ document.addEventListener('click', (e) => {
     case 'example': { const input = b.closest('form').condition; input.value = cond; input.focus(); break; }
     case 'sync-spus': run(() => send('POST', '/api/sync-spus'), (r) => fetchNote(`${r.added} stocks`)).then(() => send('POST', '/api/refresh').catch(() => {})); break;
     case 'refresh': run(() => send('POST', '/api/refresh'), 'Fetching new data in the background'); break;
+    case 'mode': setMode(to); state.practice = null; loadPractice().catch(() => {}); location.hash = to === 'practice' ? 'practice' : 'portfolio'; route(); pollStatus(true); break;
+    case 'advance': advance(b.dataset.step); break;
+    case 'practice-start': setMode('practice'); run(async () => { state.practice = await send('POST', '/api/practice/start', { scenario: b.dataset.scenario }); drawPracticeBar(); pollStatus(true); location.hash = 'watchlist'; }, 'Practice started. Pick a stock and press Buy.'); break;
+    case 'practice-end': if (confirm('End practice and delete the practice account?')) run(async () => { await send('POST', '/api/practice/end'); state.practice = null; setMode('real'); drawPracticeBar(); location.hash = 'portfolio'; }, 'Practice ended'); break;
   }
 });
 
@@ -669,6 +770,7 @@ document.addEventListener('submit', (e) => {
     case 'add-rule': run(() => send('POST', '/api/rules', { name: v('name'), ticker: v('ticker'), action: v('action'), thesis: v('thesis'), condition: v('condition') }), (r) => `Rule saved (version ${r.version})`); break;
     case 'review': break; // a verdict needs an explicit button press, not Enter
     case 'setting': run(() => send('POST', '/api/settings', { key: f.dataset.key, value: v('value') }), 'Saved; the simulation was re-run'); break;
+    case 'practice-custom': setMode('practice'); run(async () => { state.practice = await send('POST', '/api/practice/start', { scenario: 'custom', date: v('date') }); drawPracticeBar(); location.hash = 'watchlist'; }, 'Practice started. Pick a stock and press Buy.'); break;
     case 'setup': run(() => send('POST', '/api/setup', { tiingoKey: v('tiingoKey'), name: v('name'), email: v('email') }), 'Connected. Fetching data in the background.').then(() => send('POST', '/api/refresh').catch(() => {})); break;
   }
 });
@@ -687,6 +789,13 @@ async function pollStatus(once) {
     state.keys = s.keys;
     const el = $('#status');
     let text, cls = '';
+    if (inPractice()) {
+      el.innerHTML = `<span class="dot"></span>${esc(state.practice?.active ? 'practice · ' + state.practice.clock : 'practice')}`;
+      el.className = 'status busy';
+      el.title = 'practice account: your real data is untouched';
+      if (once !== true) pollStatus.t = setTimeout(pollStatus, 30000);
+      return;
+    }
     const wait = (s.job.message || '').match(/waiting until (\d\d:\d\d)/);
     if (!s.keys) { text = 'connect data sources'; cls = 'warn'; }
     else if (s.job.running && wait) { text = `paused until ${wait[1]} (free data limit) · ${s.job.done}/${s.job.total}`; cls = 'busy'; }
@@ -704,18 +813,21 @@ async function pollStatus(once) {
   if (once !== true) pollStatus.t = setTimeout(pollStatus, state.status?.job?.running ? 4000 : 30000);
 }
 $('#status').addEventListener('click', () => {
+  if (inPractice()) { location.hash = 'practice'; return; }
   if (!state.status?.keys) { location.hash = 'settings'; return; }
   if (!state.status.job.running) run(() => send('POST', '/api/refresh'), 'Fetching new data in the background');
 });
 
 /* shell */
-const RENDER = { portfolio: viewPortfolio, watchlist: viewWatchlist, journal: viewJournal, signals: viewSignals, orders: viewOrders, screen: viewScreen, settings: viewSettings };
+const RENDER = { portfolio: viewPortfolio, watchlist: viewWatchlist, journal: viewJournal, signals: viewSignals, orders: viewOrders, screen: viewScreen, settings: viewSettings, practice: viewPractice };
 
 function drawNav() {
-  $('#nav').innerHTML = VIEWS.map((v, i) => `<a href="#${v}" ${v === state.view ? 'aria-current="page"' : ''}><span class="n">0${i + 1}</span>${v}</a>`).join('');
+  $('#nav').innerHTML = VIEWS.map((v, i) => `<a href="#${v}" ${v === state.view ? 'aria-current="page"' : ''} ${v === 'practice' ? 'class="nav-practice"' : ''}><span class="n">0${i + 1}</span>${v}</a>`).join('');
+  $('#mode').innerHTML = ['real', 'practice'].map((m) => `<button type="button" data-act="mode" data-to="${m}" aria-pressed="${mode === m}">${m}</button>`).join('');
   const listKeys = state.view === 'watchlist' ? '<span class="hint"><kbd>j/k</kbd>move</span><span class="hint"><kbd>b</kbd>buy</span><span class="hint"><kbd>h</kbd>rule hits</span>' : '';
   const filterKey = state.view === 'watchlist' || state.view === 'screen' ? '<span class="hint"><kbd>/</kbd>filter</span>' : '';
   $('#hints').innerHTML = VIEWS.map((v, i) => `<span class="hint opt"><kbd>${i + 1}</kbd>${v}</span>`).join('') + listKeys + filterKey +
+    (inPractice() && state.practice?.active ? '<span class="hint"><kbd>n</kbd>next day</span><span class="hint"><kbd>w</kbd>week</span><span class="hint"><kbd>m</kbd>month</span>' : '') +
     '<span class="hint"><kbd>?</kbd>help</span>';
 }
 
@@ -723,7 +835,10 @@ async function route() {
   const [view, arg] = location.hash.slice(1).split('/');
   if (VIEWS.includes(view) && view !== state.view) state.filter = '';
   state.view = VIEWS.includes(view) ? view : 'portfolio';
+  if (inPractice() && !state.practice) await loadPractice().catch(() => {});
+  if (inPractice() && !state.practice?.active) state.view = 'practice';
   drawNav();
+  drawPracticeBar();
   $('#path').textContent = '~/' + state.view;
   clearCharts();
   const main = $('#view');
@@ -749,6 +864,7 @@ document.addEventListener('keydown', (e) => {
   const n = Number(e.key);
   if (n >= 1 && n <= VIEWS.length) { location.hash = VIEWS[n - 1]; return; }
   if (e.key === 'r') { route(); return; }
+  if (inPractice() && state.practice?.active && !state.practice.atToday && { n: 1, w: 1, m: 1 }[e.key]) { advance({ n: 'day', w: 'week', m: 'month' }[e.key]); return; }
   if (e.key === 'h' && state.view === 'watchlist') { state.hits = !state.hits; showTicker(); return; }
   if (e.key === 'b' && state.view === 'watchlist' && visibleRows().some((r) => r.ticker === state.sel)) { openTrade(state.sel, 'buy').catch((err) => toast(err.message, 'err')); return; }
   if (e.key === '/' && $('#filter')) { e.preventDefault(); $('#filter').focus(); return; }
@@ -799,5 +915,6 @@ function tick() {
 window.addEventListener('hashchange', route);
 setInterval(tick, 1000);
 tick();
+setMode(mode);
 route();
 pollStatus();

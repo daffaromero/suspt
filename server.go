@@ -251,15 +251,18 @@ func securityHeaders(h http.Handler) http.Handler {
 }
 
 func newServer(a *app) http.Handler {
-	db := a.db
 	mux := http.NewServeMux()
 	static, _ := fs.Sub(webFS, "web")
 	mux.Handle("GET /", http.FileServerFS(static))
 	reply := func(w http.ResponseWriter, r *http.Request, v any, err error, failStatus int) {
-		if errors.Is(err, errNoTicker) {
+		switch {
+		case errors.Is(err, errNoTicker):
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
-		} else if err != nil {
+		case errors.Is(err, errNoPractice):
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		case err != nil:
 			log.Printf("%s %s: %v", r.Method, r.URL.Path, err)
 			http.Error(w, err.Error(), failStatus)
 			return
@@ -270,37 +273,47 @@ func newServer(a *app) http.Handler {
 			log.Printf("%s: encode: %v", r.URL.Path, err)
 		}
 	}
-	api := func(path string, fn func(*http.Request) (any, error)) {
-		mux.HandleFunc("GET "+path, func(w http.ResponseWriter, r *http.Request) {
-			v, err := fn(r)
-			reply(w, r, v, err, http.StatusInternalServerError)
+	// Every handler gets the database the request is about: the real account, or the
+	// practice copy when the page sends X-Suspt-Mode: practice.
+	type handler func(db *sql.DB, r *http.Request) (any, error)
+	route := func(pattern string, failStatus int, fn handler) {
+		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+			db, err := a.dbFor(r)
+			if err != nil {
+				reply(w, r, nil, err, failStatus)
+				return
+			}
+			v, err := fn(db, r)
+			reply(w, r, v, err, failStatus)
 		})
 	}
-	// Actions answer 400 with a message meant for the person using the app.
-	act := func(pattern string, fn func(*http.Request) (any, error)) {
-		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
-			v, err := fn(r)
-			reply(w, r, v, err, http.StatusBadRequest)
-		})
+	api := func(path string, fn handler) { route("GET "+path, http.StatusInternalServerError, fn) }
+	act := func(pattern string, fn handler) { route(pattern, http.StatusBadRequest, fn) } // 400s carry a message for the person
+	realOnly := func(fn func(r *http.Request) (any, error)) handler {
+		return func(_ *sql.DB, r *http.Request) (any, error) {
+			if isPractice(r) {
+				return nil, errors.New("not available in practice: practice uses saved history and your real account's settings")
+			}
+			return fn(r)
+		}
 	}
 	ok := func(err error) (any, error) { return map[string]bool{"ok": err == nil}, err }
 
-	api("/api/summary", func(*http.Request) (any, error) { return portfolioSummary(db) })
-	api("/api/watchlist", func(*http.Request) (any, error) { return watchlistRows(db) })
-	api("/api/journal", func(*http.Request) (any, error) { return journalReport(db) })
-	api("/api/signals", func(*http.Request) (any, error) { return currentSignals(db) })
-	api("/api/orders", func(*http.Request) (any, error) { return ordersJSON(db) })
-	api("/api/screens", func(*http.Request) (any, error) { return latestScreens(db) })
-	api("/api/settings", func(*http.Request) (any, error) { return a.settingsJSON() })
-	api("/api/status", func(*http.Request) (any, error) { return a.status(), nil })
-	api("/api/rules", func(*http.Request) (any, error) {
+	api("/api/summary", func(db *sql.DB, _ *http.Request) (any, error) { return portfolioSummary(db) })
+	api("/api/watchlist", func(db *sql.DB, _ *http.Request) (any, error) { return watchlistRows(db) })
+	api("/api/journal", func(db *sql.DB, _ *http.Request) (any, error) { return journalReport(db) })
+	api("/api/signals", func(db *sql.DB, _ *http.Request) (any, error) { return currentSignals(db) })
+	api("/api/orders", func(db *sql.DB, _ *http.Request) (any, error) { return ordersJSON(db) })
+	api("/api/screens", func(db *sql.DB, _ *http.Request) (any, error) { return latestScreens(db) })
+	api("/api/settings", func(db *sql.DB, _ *http.Request) (any, error) { return settingsJSON(db) })
+	api("/api/rules", func(db *sql.DB, _ *http.Request) (any, error) {
 		r, err := loadRules(db, true)
 		if r == nil {
 			r = []rule{}
 		}
 		return r, err
 	})
-	api("/api/ticker/{t}", func(r *http.Request) (any, error) {
+	api("/api/ticker/{t}", func(db *sql.DB, r *http.Request) (any, error) {
 		t := strings.ToUpper(r.PathValue("t"))
 		if !tickerRe.MatchString(t) {
 			return nil, errNoTicker
@@ -308,21 +321,35 @@ func newServer(a *app) http.Handler {
 		return loadTickerDetail(db, t)
 	})
 
-	act("POST /api/orders", a.postOrder)
-	act("POST /api/orders/{id}/cancel", func(r *http.Request) (any, error) { return ok(cancelOrder(db, r.PathValue("id"))) })
-	act("POST /api/watchlist", func(r *http.Request) (any, error) {
+	act("POST /api/orders", postOrder)
+	act("POST /api/orders/{id}/cancel", func(db *sql.DB, r *http.Request) (any, error) { return ok(cancelOrder(db, r.PathValue("id"))) })
+	act("POST /api/watchlist", func(db *sql.DB, r *http.Request) (any, error) {
 		var in struct{ Tickers []string }
 		if err := decode(r, &in); err != nil {
 			return nil, err
 		}
+		if isPractice(r) { // practice can't fetch, so only stocks with saved history make sense
+			for _, t := range in.Tickers {
+				var n int
+				if err := db.QueryRow(`SELECT COUNT(*) FROM prices WHERE ticker = ?`, strings.ToUpper(strings.TrimSpace(t))).Scan(&n); err != nil {
+					return nil, err
+				}
+				if n == 0 {
+					return nil, fmt.Errorf("%q has no saved history for this practice date; add it to your real watchlist first", strings.ToUpper(strings.TrimSpace(t)))
+				}
+			}
+		}
 		n, err := addWatch(db, in.Tickers)
+		if err == nil && isPractice(r) {
+			err = practiceRefresh(db)
+		}
 		return map[string]int{"added": n}, err
 	})
-	act("DELETE /api/watchlist/{t}", func(r *http.Request) (any, error) {
+	act("DELETE /api/watchlist/{t}", func(db *sql.DB, r *http.Request) (any, error) {
 		_, err := db.Exec(`DELETE FROM watchlist WHERE ticker = ?`, strings.ToUpper(r.PathValue("t")))
 		return ok(err)
 	})
-	act("POST /api/levels", func(r *http.Request) (any, error) {
+	act("POST /api/levels", func(db *sql.DB, r *http.Request) (any, error) {
 		var in struct {
 			Ticker, Name string
 			Price        float64
@@ -332,11 +359,11 @@ func newServer(a *app) http.Handler {
 		}
 		return ok(setLevel(db, strings.ToUpper(in.Ticker), in.Name, in.Price))
 	})
-	act("DELETE /api/levels/{t}/{name}", func(r *http.Request) (any, error) {
+	act("DELETE /api/levels/{t}/{name}", func(db *sql.DB, r *http.Request) (any, error) {
 		_, err := db.Exec(`DELETE FROM levels WHERE ticker = ? AND name = ?`, strings.ToUpper(r.PathValue("t")), r.PathValue("name"))
 		return ok(err)
 	})
-	act("POST /api/rules", func(r *http.Request) (any, error) {
+	act("POST /api/rules", func(db *sql.DB, r *http.Request) (any, error) {
 		var in struct{ Name, Ticker, Action, Thesis, Condition string }
 		if err := decode(r, &in); err != nil {
 			return nil, err
@@ -345,8 +372,8 @@ func newServer(a *app) http.Handler {
 		err := addRule(db, &ru)
 		return map[string]int{"version": ru.Version}, err
 	})
-	act("DELETE /api/rules/{name}", func(r *http.Request) (any, error) { return ok(retireRule(db, r.PathValue("name"))) })
-	act("POST /api/reviews", func(r *http.Request) (any, error) {
+	act("DELETE /api/rules/{name}", func(db *sql.DB, r *http.Request) (any, error) { return ok(retireRule(db, r.PathValue("name"))) })
+	act("POST /api/reviews", func(db *sql.DB, r *http.Request) (any, error) {
 		var in struct {
 			Ticker, Verdict, Note string
 			Percent               float64
@@ -356,23 +383,48 @@ func newServer(a *app) http.Handler {
 		}
 		return ok(setReview(db, in.Ticker, in.Verdict, in.Percent, in.Note))
 	})
-	act("POST /api/settings", func(r *http.Request) (any, error) {
+	act("POST /api/settings", func(db *sql.DB, r *http.Request) (any, error) {
 		var in struct{ Key, Value string }
 		if err := decode(r, &in); err != nil {
 			return nil, err
 		}
+		if isPractice(r) && (in.Key == "start_date" || in.Key == "auto_refresh" || in.Key == "benchmark") {
+			return nil, errors.New("practice sets this one itself; start a new practice to change it")
+		}
 		return ok(setSetting(db, in.Key, in.Value))
 	})
-	act("POST /api/setup", a.postSetup)
-	act("POST /api/refresh", func(*http.Request) (any, error) { return ok(a.startRefresh("manual")) })
-	act("POST /api/sync-spus", func(*http.Request) (any, error) {
-		members, err := syncSPUS(db)
+	act("POST /api/setup", realOnly(a.postSetup))
+	act("POST /api/refresh", realOnly(func(*http.Request) (any, error) { return ok(a.startRefresh("manual")) }))
+	act("POST /api/sync-spus", realOnly(func(*http.Request) (any, error) {
+		members, err := syncSPUS(a.db)
 		if err != nil {
 			return nil, err
 		}
-		n, err := addWatch(db, members)
+		n, err := addWatch(a.db, members)
 		return map[string]int{"members": len(members), "added": n}, err
+	}))
+
+	// Practice ("time machine") control lives outside the per-request database choice.
+	plain := func(pattern string, fn func(r *http.Request) (any, error)) {
+		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+			v, err := fn(r)
+			reply(w, r, v, err, http.StatusBadRequest)
+		})
+	}
+	plain("GET /api/status", func(*http.Request) (any, error) { return a.status(), nil }) // the real account's data, in either mode
+	plain("GET /api/practice", func(*http.Request) (any, error) { return a.practiceStatus() })
+	plain("POST /api/practice/start", a.postPracticeStart)
+	plain("POST /api/practice/advance", func(r *http.Request) (any, error) {
+		var in struct{ Step string }
+		if err := decode(r, &in); err != nil {
+			return nil, err
+		}
+		if _, err := a.advancePractice(in.Step); err != nil {
+			return nil, err
+		}
+		return a.practiceStatus()
 	})
+	plain("POST /api/practice/end", func(*http.Request) (any, error) { return ok(a.endPractice()) })
 	return securityHeaders(guard(mux))
 }
 

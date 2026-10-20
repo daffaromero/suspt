@@ -299,3 +299,28 @@ dialog#trade::backdrop { background: rgba(8, 11, 50, 0.72); backdrop-filter: blu
 .waiting .wo { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 4px 0; }
 .waiting .wo b { font-weight: 700; }
 .waiting .fine { margin: 6px 0 0; }
+
+/* practice ("time machine"): amber everywhere, so it is never mistaken for the real account */
+.mode { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+.mode button { font: inherit; color: var(--muted); background: none; border: 0; padding: 2px 10px; cursor: pointer; }
+.mode button[aria-pressed="true"] { color: var(--bg); background: var(--text); }
+body.practice .mode button[aria-pressed="true"] { background: var(--warning); }
+body.practice .top { border-bottom: 2px solid var(--warning); }
+.practice-bar {
+  position: sticky; top: 38px; z-index: 9; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px;
+  padding: 8px 16px; background: rgba(250, 178, 25, 0.12); border-bottom: 1px dashed var(--warning); color: var(--text);
+}
+.practice-bar[hidden] { display: none; }
+.practice-bar > b { color: var(--warning); text-transform: uppercase; letter-spacing: 0.08em; }
+.practice-bar .pdate { font: 400 18px/1 var(--serif); }
+#nav a.nav-practice .n { color: var(--warning); }
+.lede { max-width: 760px; color: var(--muted); }
+.lede b { color: var(--text); font-weight: 400; }
+.scenarios { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin: 14px 0; }
+.scenario { display: grid; gap: 8px; align-content: start; }
+.scenario h3 { margin: 0; font: 400 26px/1.1 var(--serif); }
+.scenario p { margin: 0; }
+.scenario .btn, .scenario button { justify-self: start; }
+.missions li.next { border-color: var(--warning); opacity: 1; }
+.report .big-line { font: 400 22px/1.4 var(--serif); margin-top: 0; }
+.report b { font-weight: 400; }

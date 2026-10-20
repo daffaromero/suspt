@@ -262,18 +262,18 @@ func addRule(db *sql.DB, r *rule) error {
 	if err := tx.QueryRow(`SELECT COALESCE(MAX(version), 0) + 1 FROM rules WHERE name = ?`, r.Name).Scan(&r.Version); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`UPDATE rules SET retired_on = ? WHERE name = ? AND retired_on IS NULL`, nyToday(), r.Name); err != nil {
+	if _, err := tx.Exec(`UPDATE rules SET retired_on = ? WHERE name = ? AND retired_on IS NULL`, today(db), r.Name); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(`INSERT INTO rules (name, version, ticker, action, thesis, condition, created_on) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		r.Name, r.Version, r.Ticker, r.Action, r.Thesis, r.Condition, nyToday()); err != nil {
+		r.Name, r.Version, r.Ticker, r.Action, r.Thesis, r.Condition, today(db)); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
 func retireRule(db *sql.DB, name string) error {
-	res, err := db.Exec(`UPDATE rules SET retired_on = ? WHERE name = ? AND retired_on IS NULL`, nyToday(), name)
+	res, err := db.Exec(`UPDATE rules SET retired_on = ? WHERE name = ? AND retired_on IS NULL`, today(db), name)
 	if err != nil {
 		return err
 	}
@@ -354,7 +354,7 @@ func addWatch(db *sql.DB, tickers []string) (int, error) {
 	}
 	added := 0
 	for _, t := range tickers {
-		res, err := db.Exec(`INSERT OR IGNORE INTO watchlist (ticker, added_on) VALUES (?, ?)`, t, nyToday())
+		res, err := db.Exec(`INSERT OR IGNORE INTO watchlist (ticker, added_on) VALUES (?, ?)`, t, today(db))
 		if err != nil {
 			return added, err
 		}

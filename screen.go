@@ -483,7 +483,7 @@ func screenTicker(db *sql.DB, ticker string) ([]screenRow, error) {
 		}
 		r, ok := evaluate(facts, months, splits, i, np)
 		row := screenRow{AsOf: months[i].Date, Business: business, ratios: r, Status: "NO_DATA",
-			Provisional: current && months[i].Date[:7] >= nyToday()[:7]}
+			Provisional: current && months[i].Date[:7] >= today(db)[:7]}
 		if note != "" {
 			row.Notes = append(row.Notes, note)
 		}
@@ -630,7 +630,7 @@ func setReview(db *sql.DB, ticker, verdict string, pctVal float64, note string) 
 		return fmt.Errorf("non-permissible revenue must be a percent from 0 to under 100, got %v", pctVal)
 	}
 	if _, err := db.Exec(`INSERT OR REPLACE INTO business_reviews (ticker, verdict, nonpermissible_revenue, note, reviewed_on)
-		VALUES (?, ?, ?, ?, ?)`, ticker, verdict, pctVal/100, strings.TrimSpace(note), nyToday()); err != nil {
+		VALUES (?, ?, ?, ?, ?)`, ticker, verdict, pctVal/100, strings.TrimSpace(note), today(db)); err != nil {
 		return err
 	}
 	screenTicker(db, ticker) // best effort: without prices or filings yet, the next refresh screens it
@@ -720,7 +720,7 @@ func runSyncSPUS(db *sql.DB) error {
 	}
 	added := 0
 	for _, t := range members {
-		res, err := db.Exec(`INSERT OR IGNORE INTO watchlist (ticker, added_on) VALUES (?, ?)`, t, nyToday())
+		res, err := db.Exec(`INSERT OR IGNORE INTO watchlist (ticker, added_on) VALUES (?, ?)`, t, today(db))
 		if err != nil {
 			return err
 		}

@@ -23,6 +23,8 @@ type app struct {
 	dbPath  string
 	version string // changes on every start, so open tabs know to reload
 
+	practice *sql.DB // opened on demand; see practice.go
+
 	mu          sync.Mutex
 	job         jobStatus
 	lastAttempt time.Time
@@ -173,7 +175,7 @@ func nullF(p *float64) sql.NullFloat64 {
 	return sql.NullFloat64{Float64: *p, Valid: true}
 }
 
-func (a *app) postOrder(r *http.Request) (any, error) {
+func postOrder(db *sql.DB, r *http.Request) (any, error) {
 	var in struct {
 		Ticker, Side, Reason, Thesis string
 		Shares, USD, Limit           *float64
@@ -183,7 +185,7 @@ func (a *app) postOrder(r *http.Request) (any, error) {
 		return nil, err
 	}
 	o := order{Ticker: in.Ticker, Side: in.Side, Qty: nullF(in.Shares), Notional: nullF(in.USD), Limit: nullF(in.Limit), GTC: in.GTC, Reason: in.Reason, Thesis: in.Thesis}
-	if err := placeOrder(a.db, &o); err != nil {
+	if err := placeOrder(db, &o); err != nil {
 		return nil, err
 	}
 	return map[string]any{"id": o.ID, "placedOn": o.PlacedOn}, nil
@@ -258,8 +260,8 @@ func writeEnv(path string, vals map[string]string) error {
 	return os.WriteFile(path, []byte(strings.Join(out, "\n")+"\n"), 0o600)
 }
 
-func (a *app) settingsJSON() (any, error) {
-	set, err := loadSettings(a.db)
+func settingsJSON(db *sql.DB) (any, error) {
+	set, err := loadSettings(db)
 	if err != nil {
 		return nil, err
 	}

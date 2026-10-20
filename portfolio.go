@@ -135,6 +135,16 @@ func nyToday() string {
 	return time.Now().In(loc).Format(time.DateOnly)
 }
 
+// today is the date the account lives in: New York today, or the practice date when the
+// database is a practice copy (see practice.go).
+func today(db *sql.DB) string {
+	var clock string
+	if db.QueryRow(`SELECT value FROM settings WHERE key = 'practice_clock'`).Scan(&clock) == nil && clock != "" {
+		return clock
+	}
+	return nyToday()
+}
+
 func round2(x float64) float64 { return math.Round(x*100) / 100 }
 func floor6(x float64) float64 { return math.Floor(x*1e6+1e-9) / 1e6 }
 
@@ -829,7 +839,7 @@ func placeOrder(db *sql.DB, o *order) error {
 			return fmt.Errorf("%s is %s as of the last monthly screen, buy refused %s", o.Ticker, status, note)
 		}
 	}
-	o.PlacedOn = nyToday()
+	o.PlacedOn = today(db)
 	res, err := db.Exec(`INSERT INTO orders (placed_on, ticker, side, qty, notional, limit_price, gtc, reason, thesis) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		o.PlacedOn, o.Ticker, o.Side, o.Qty, o.Notional, o.Limit, o.GTC, o.Reason, o.Thesis)
 	if err != nil {
@@ -846,12 +856,12 @@ func runCancel(db *sql.DB, args []string) error {
 	if err := cancelOrder(db, args[0]); err != nil {
 		return err
 	}
-	fmt.Printf("order #%s cancelled from %s (fills on or before that day stand)\n", args[0], nyToday())
+	fmt.Printf("order #%s cancelled from %s (fills on or before that day stand)\n", args[0], today(db))
 	return nil
 }
 
 func cancelOrder(db *sql.DB, id string) error {
-	res, err := db.Exec(`UPDATE orders SET cancelled_on = ? WHERE id = ? AND cancelled_on IS NULL AND status = 'open'`, nyToday(), id)
+	res, err := db.Exec(`UPDATE orders SET cancelled_on = ? WHERE id = ? AND cancelled_on IS NULL AND status = 'open'`, today(db), id)
 	if err != nil {
 		return err
 	}
