@@ -554,6 +554,16 @@ async function viewSettings(main) {
     const type = it.key === 'start_date' ? 'date' : ['benchmark', 'allowed_etfs'].includes(it.key) ? 'text' : 'number';
     return `<input name="value" type="${type}" ${type === 'number' ? 'step="any" min="0"' : ''} value="${esc(it.value)}" aria-label="${esc(SETTING_LABELS[it.key] || it.key)}">`;
   };
+  if (inPractice()) { // practice uses saved history: only fees, tax and limits apply
+    main.innerHTML = `${label('01', 'practice settings')}
+      <p class="lede">Fees, tax and limits for the practice account. They start as copies of your real settings; changing them here doesn't change the real ones.</p>
+      <div class="settings">${items.filter((it) => !['start_date', 'auto_refresh', 'benchmark'].includes(it.key)).map((it) => `
+        <form class="setting" data-form="setting" data-key="${esc(it.key)}">
+          <label><b>${esc(SETTING_LABELS[it.key] || it.key)}</b><span class="fine">${esc(it.help)}</span></label>
+          ${field(it)}<button class="btn small" type="submit">Save</button>
+        </form>`).join('')}</div>`;
+    return;
+  }
   main.innerHTML = `${label('01', 'data sources')}
     <div class="panel narrow">
       <p>${st.keys ? '<span class="badge COMPLIANT"><span class="i">✓</span>connected</span> Enter new values only if you want to replace them.' : '<span class="badge REVIEW"><span class="i">?</span>not connected yet</span>'}</p>
