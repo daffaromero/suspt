@@ -129,3 +129,17 @@ func TestReviewRegressions(t *testing.T) {
 		t.Errorf("split-adjusted sell: %s qty %v @ %v, held %v; want filled 2 @ 61, held 0", sell.Status, sell.FillQty, sell.FillPrice, s.held("BBB"))
 	}
 }
+
+// Regression: ISSUE-005: switching the benchmark to a fund without prices saved it and broke the replay
+// Found by /qa on 2026-10-20
+// Report: .gstack/qa-reports/qa-report-127-0-0-1-2026-10-20.md
+func TestBenchmarkWithoutPricesIsRefused(t *testing.T) {
+	db := testDB(t)
+	if err := setSetting(db, "benchmark", "hlal"); err == nil {
+		t.Fatal("benchmark without prices accepted")
+	}
+	set, _ := loadSettings(db)
+	if set["benchmark"] != "SPUS" {
+		t.Fatalf("benchmark = %q after a refused change, want the default SPUS", set["benchmark"])
+	}
+}
