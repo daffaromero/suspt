@@ -904,6 +904,7 @@ async function route() {
   drawNav();
   drawPracticeBar();
   $('#path').textContent = '~/' + state.view;
+  document.title = `${state.view}${inPractice() ? ' (practice)' : ''} · suspt`; // screen readers and tabs say where you are
   clearCharts();
   const main = $('#view');
   try {
