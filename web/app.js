@@ -1173,7 +1173,7 @@ async function route() {
 document.addEventListener('keydown', (e) => {
   const help = $('#help');
   if ($('#trade').open) return; // the dialog handles its own keys
-  const typing = e.target.matches('input, textarea, select');
+  const typing = Boolean(e.target.matches?.('input, textarea, select'));
   if (e.key === 'Escape') {
     if (!help.hidden) { help.hidden = true; return; }
     if (typing) { e.target.blur(); }

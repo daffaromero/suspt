@@ -16,9 +16,14 @@ suspt gives you pretend money, real US stock prices and a Sharia screen built fr
 - **Purification.** Each dividend's impure share is calculated and set aside automatically.
 - **A fair benchmark.** Your result is compared with SPUS, the S&P 500 Shariah fund, given the same deposits on the same dates.
 - **Rules you can read.** Plain conditions such as `close crosses_above sma200` flag buy ideas; editing a rule keeps its earlier versions. Nothing is a black box.
+- **A home page that keeps watch.** Your shortlist and holdings as small charts, what changed since your last visit (fills, dividends, compliance changes, your levels and rules), and ideas worked out from plain rules, each one saying which rule produced it. No predictions, no "buy now".
+- **A path from beginner to advanced.** Short lessons that finish when you do the thing. Your level decides which pages are in the menu, so a beginner sees five and the rest arrive when they're useful.
+- **Three looks.** Night, day, and a black-and-amber terminal theme. Advanced users get a pro view with quotes, chart, account, news and orders on one screen, and a command bar (`:` or Ctrl+K): `NVDA`, `BUY NVDA 50`, `SELL NVDA ALL`, `PORT`, `THEME DAY`.
 - **A time machine.** Practice mode starts an account in the past, shows you only what was known on that day, and lets you fast-forward a day, week or month at a time. Missions walk a new user through it and a report card closes each quarter.
 
 ![Report card after a practice quarter](docs/screenshots/report-card.png)
+
+![The pro view in the terminal theme](docs/screenshots/pro-terminal.png)
 
 ## Get started (no terminal needed)
 
@@ -92,6 +97,7 @@ One Go binary and one SQLite file, with no framework and one dependency ([modern
 | `screen.go` | The three Sharia standards and SPUS membership |
 | `portfolio.go`, `journal.go` | Order engine, replay, benchmark, journal |
 | `signals.go` | Watchlist, price levels, the rule language |
+| `monitor.go` | The home page: followed stocks, what changed, rule-based ideas |
 | `practice.go` | Practice mode (the time machine) |
 | `app.go`, `server.go`, `web/` | The app and its local API |
 
