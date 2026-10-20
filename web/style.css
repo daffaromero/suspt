@@ -9,7 +9,7 @@
   --raise-2: rgba(238, 241, 255, 0.1);
   --text: #eef1ff;
   --muted: #a9afdc;
-  --faint: #7178b4;
+  --faint: #959bd0; /* lowest text tier; 4.98:1 on the lightest panel */
   --line: rgba(238, 241, 255, 0.22);
   --grid: rgba(238, 241, 255, 0.07);
   --accent: #f4d33a;
@@ -209,7 +209,7 @@ code, pre { font-family: var(--mono); }
 .btn:hover { background: var(--raise-2); }
 .btn.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); font-weight: 700; }
 .btn.primary:hover { filter: brightness(1.08); }
-.btn.danger { color: var(--critical); border-color: rgba(224, 84, 84, 0.5); }
+.btn.danger { color: #ff7b7b; border-color: rgba(224, 84, 84, 0.5); } /* text-safe red, 5.3:1 */
 .btn.quiet { background: none; color: var(--muted); }
 .btn.small { padding: 1px 8px; font-size: 12px; }
 .btn:disabled { opacity: 0.5; cursor: default; }
