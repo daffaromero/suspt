@@ -32,7 +32,7 @@ const empty = (html) => `<p class="empty">${html}</p>`;
 const btn = (act, text, attrs = '', cls = '') => `<button type="button" class="btn ${cls}" data-act="${act}" ${attrs}>${text}</button>`;
 
 const VIEWS = ['portfolio', 'watchlist', 'journal', 'signals', 'orders', 'screen', 'settings'];
-const state = { view: 'portfolio', sel: 0, filter: '', charts: [], data: {}, range: '1Y', hits: false, status: null };
+const state = { view: 'portfolio', sel: '', filter: '', charts: [], data: {}, range: '1Y', hits: false, status: null };
 
 async function get(path) {
   const r = await fetch(path, { headers: { Accept: 'application/json' } });
@@ -227,11 +227,12 @@ async function viewWatchlist(main, ticker) {
       ${addForm}<p>${btn('sync-spus', 'Add all SPUS stocks', '', 'primary')}</p></div>`;
     return;
   }
-  if (ticker) {
-    const i = rows.findIndex((r) => r.ticker === ticker);
-    if (i >= 0) state.sel = i;
-  } else if (!rows[state.sel]?.date) {
-    state.sel = Math.max(0, rows.findIndex((r) => r.date)); // start on a ticker that has data
+  // The selection is a ticker, never a list position: positions shift when the filter changes.
+  if (ticker && rows.some((r) => r.ticker === ticker)) {
+    state.sel = ticker;
+    if (!visibleRows().some((r) => r.ticker === ticker)) state.filter = ''; // a link must show what it names
+  } else if (!rows.some((r) => r.ticker === state.sel && r.date)) {
+    state.sel = (rows.find((r) => r.date) || rows[0]).ticker; // start on a ticker that has data
   }
   const pending = rows.filter((r) => !r.date).length;
   main.innerHTML = `${label('01', 'watchlist')}
@@ -240,7 +241,12 @@ async function viewWatchlist(main, ticker) {
       <div class="list">${addForm}<input id="filter" placeholder="/ filter" aria-label="Filter watchlist" value="${esc(state.filter)}"><ul id="wl" role="listbox" aria-label="Watchlist"></ul></div>
       <section id="detail" aria-live="polite"></section>
     </div>`;
-  $('#filter').addEventListener('input', (e) => { state.filter = e.target.value; drawList(); });
+  $('#filter').addEventListener('input', (e) => {
+    const before = state.sel;
+    state.filter = e.target.value;
+    drawList();
+    if (state.sel !== before) showTicker(); // the selected stock was filtered out
+  });
   drawList();
   await showTicker();
 }
@@ -252,14 +258,14 @@ function visibleRows() {
 
 function drawList() {
   const rows = visibleRows();
-  state.sel = Math.min(state.sel, Math.max(0, rows.length - 1));
-  $('#wl').innerHTML = rows.map((r, i) => `<li><button role="option" aria-selected="${i === state.sel}" data-i="${i}">
+  if (rows.length && !rows.some((r) => r.ticker === state.sel)) state.sel = rows[0].ticker;
+  $('#wl').innerHTML = rows.map((r) => `<li><button role="option" aria-selected="${r.ticker === state.sel}" data-ticker="${esc(r.ticker)}">
       <span class="t">${esc(r.ticker)}</span>${r.date
         ? `<span class="px">${money(r.close)}</span><span class="chg ${dir(r.change)}">${pct(r.change, 2)}</span>`
         : '<span class="px muted">waiting</span><span></span>'}
       <span class="meta">${badge(r.status)}<span>${esc(r.sector)}${r.held ? ' · held' : ''}${r.signals.map((s) => ` · ${s.blocked ? 'blocked' : s.action.toLowerCase()} ${esc(s.rule)}`).join('')}</span></span>
     </button></li>`).join('') || `<li class="empty" style="padding:12px">no match</li>`;
-  $('#wl').querySelectorAll('button').forEach((b) => (b.onclick = () => { state.sel = +b.dataset.i; drawList(); showTicker(); }));
+  $('#wl').querySelectorAll('button').forEach((b) => (b.onclick = () => { state.sel = b.dataset.ticker; drawList(); showTicker(); }));
 }
 
 function sma(bars, n) {
@@ -274,7 +280,7 @@ function sma(bars, n) {
 }
 
 async function showTicker() {
-  const row = visibleRows()[state.sel];
+  const row = visibleRows().find((r) => r.ticker === state.sel);
   if (!row) { $('#detail').innerHTML = ''; return; }
   history.replaceState(null, '', `#watchlist/${row.ticker}`);
   $('#path').textContent = `~/watchlist/${row.ticker.toLowerCase()}`;
@@ -729,12 +735,15 @@ document.addEventListener('keydown', (e) => {
   if (n >= 1 && n <= VIEWS.length) { location.hash = VIEWS[n - 1]; return; }
   if (e.key === 'r') { route(); return; }
   if (e.key === 'h' && state.view === 'watchlist') { state.hits = !state.hits; showTicker(); return; }
-  if (e.key === 'b' && state.view === 'watchlist') { const r = visibleRows()[state.sel]; if (r) openTrade(r.ticker, 'buy').catch((err) => toast(err.message, 'err')); return; }
+  if (e.key === 'b' && state.view === 'watchlist' && visibleRows().some((r) => r.ticker === state.sel)) { openTrade(state.sel, 'buy').catch((err) => toast(err.message, 'err')); return; }
   if (e.key === '/' && $('#filter')) { e.preventDefault(); $('#filter').focus(); return; }
   if (state.view === 'watchlist' && ['j', 'k', 'ArrowDown', 'ArrowUp'].includes(e.key)) {
     e.preventDefault();
     const rows = visibleRows();
-    state.sel = Math.max(0, Math.min(rows.length - 1, state.sel + (e.key === 'j' || e.key === 'ArrowDown' ? 1 : -1)));
+    const at = rows.findIndex((r) => r.ticker === state.sel);
+    const next = rows[Math.max(0, Math.min(rows.length - 1, at + (e.key === 'j' || e.key === 'ArrowDown' ? 1 : -1)))];
+    if (!next) return;
+    state.sel = next.ticker;
     drawList();
     $('#wl [aria-selected="true"]')?.scrollIntoView({ block: 'nearest' });
     showTicker();
