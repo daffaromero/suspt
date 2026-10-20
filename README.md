@@ -113,6 +113,10 @@ The tests cover the order engine, the screen's grace buffer and rule history, al
 - Exchange holiday calendar
 - AAOIFI column checked against the official text
 
+## License
+
+[MIT](LICENSE). The vendored chart library keeps its own [Apache-2.0 license](web/vendor/lightweight-charts.LICENSE).
+
 ## Disclaimer
 
 suspt is a learning tool. It is not investment advice and not a religious ruling; consult a qualified scholar for Sharia questions. Index methodologies are summarised from the published documents linked above, which remain the authority.
