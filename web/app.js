@@ -50,13 +50,13 @@ async function send(method, path, body) {
   return text ? JSON.parse(text) : {};
 }
 
-function toast(msg, kind = 'ok') {
+function toast(msg, kind = 'ok', ms) {
   const el = $('#toast');
   el.textContent = msg;
   el.className = `toast ${kind}`;
   el.hidden = false;
   clearTimeout(toast.t);
-  toast.t = setTimeout(() => (el.hidden = true), kind === 'err' ? 9000 : 5000);
+  toast.t = setTimeout(() => (el.hidden = true), ms || (kind === 'err' ? 9000 : 6000));
 }
 
 /* charts */
@@ -111,6 +111,18 @@ function rangeButtons(onPick) {
   return wrap;
 }
 
+/* orders that haven't filled yet, with a cancel button */
+function waitingOrders(orders) {
+  const open = orders.filter((o) => o.status === 'open');
+  if (!open.length) return '';
+  return `<div class="waiting" role="status">${open.map((o) => `<div class="wo">
+    <span class="badge open"><span class="i" aria-hidden="true">○</span>waiting</span>
+    <span><b>${esc(o.side)} ${esc(o.ticker)} ${esc(o.size)}</b> ${o.kind.startsWith('limit') ? `at ${esc(o.kind.replace(' gtc', '').replace(' day', ''))} or better` : 'at the next market open'}${o.kind.endsWith('gtc') ? ', until it fills or you cancel' : ''}</span>
+    <span class="muted">#${o.id}, placed ${esc(o.placedOn)}</span>
+    ${btn('cancel', 'Cancel', `data-id="${o.id}"`, 'small quiet')}</div>`).join('')}
+    <p class="fine">Paper orders fill at a market open after the day you place them. The next one is shown at the bottom right.</p></div>`;
+}
+
 /* getting started: shown until the three steps are done */
 function checklist(st, hasTrades) {
   const steps = [
@@ -128,8 +140,9 @@ function checklist(st, hasTrades) {
 async function viewPortfolio(main) {
   const [s, st, orders] = await Promise.all([get('/api/summary'), get('/api/status'), get('/api/orders')]);
   const intro = checklist(st, orders.length > 0);
+  const waiting = waitingOrders(orders);
   if (!s.asOf) {
-    main.innerHTML = intro + label('01', 'portfolio') + empty('The simulation starts after the first market day with data. Your starting cash appears here then.');
+    main.innerHTML = intro + label('01', 'portfolio') + waiting + empty('The simulation starts after the first market day with data. Your starting cash appears here then.');
     return;
   }
   const vs = s.twr - s.benchTwr;
@@ -139,6 +152,7 @@ async function viewPortfolio(main) {
       <div class="big">${money(s.value)}</div>
       <div class="sub">paper money as of ${esc(s.asOf)} · started ${esc(s.start)} · cash ${money(s.cash)}</div>
     </div>
+    ${waiting}
     <div class="stats">
       <div class="stat"><div class="k">deposited</div><div class="v">${money(s.contributions)}</div><div class="d">since ${esc(s.start)}</div></div>
       <div class="stat"><div class="k">profit / loss</div><div class="v ${dir(s.pnl)}">${money(s.pnl, true)}</div><div class="d">value minus deposits</div></div>
@@ -266,9 +280,9 @@ async function showTicker() {
   $('#path').textContent = `~/watchlist/${row.ticker.toLowerCase()}`;
   clearCharts();
   const unwatch = btn('unwatch', 'Remove from watchlist', `data-ticker="${esc(row.ticker)}"`, 'quiet');
-  let d;
+  let d, orders = [];
   try {
-    d = await get(`/api/ticker/${encodeURIComponent(row.ticker)}`);
+    [d, orders] = await Promise.all([get(`/api/ticker/${encodeURIComponent(row.ticker)}`), get('/api/orders')]);
   } catch (e) {
     $('#detail').innerHTML = `<div class="detail-head"><h1>${esc(row.ticker)}</h1>${badge(row.status)}<span class="spacer"></span>${unwatch}</div>` + (row.date
       ? `<p class="flag">${esc(e.message)}</p>`
@@ -285,6 +299,7 @@ async function showTicker() {
       ${btn('trade', 'Buy', `data-ticker="${esc(d.ticker)}" data-side="buy" ${canBuy ? '' : 'title="Only compliant stocks can be bought"'}`, 'primary')}
       ${d.held ? btn('trade', 'Sell', `data-ticker="${esc(d.ticker)}" data-side="sell"`) : ''}
       ${unwatch}</div>
+    ${waitingOrders(orders.filter((o) => o.ticker === d.ticker))}
     <div class="panel">
       <div class="toolbar"><div class="legend" id="px-legend"></div><span id="px-ranges"></span></div>
       <div class="chart tall" id="px-chart" role="img" aria-label="${esc(d.ticker)} daily price with your trades, key levels and rule triggers"></div>
@@ -361,8 +376,8 @@ function reviewButtons(ticker) {
   return `<div class="review"><p><b>Is this business halal?</b> The automatic checks can't tell from the company's industry code. If S&amp;P's own fund doesn't hold it, that's usually why. Decide once; it applies from today.</p>
     <form class="addrow" data-form="review" data-ticker="${esc(ticker)}">
       <label class="inline">impure revenue <input name="percent" type="number" min="0" max="99" step="0.1" value="0" aria-label="Percent of revenue from non-permissible sources">%</label>
-      <button class="btn" type="submit" name="verdict" value="ok">It's fine</button>
-      <button class="btn danger" type="submit" name="verdict" value="excluded">Exclude it</button>
+      ${btn('verdict', "It's fine", `data-ticker="${esc(ticker)}" data-verdict="ok"`)}
+      ${btn('verdict', 'Exclude it', `data-ticker="${esc(ticker)}" data-verdict="excluded"`, 'danger')}
     </form></div>`;
 }
 
@@ -538,7 +553,7 @@ async function openTrade(ticker, side) {
       <datalist id="theses">${j.theses.map((t) => `<option value="${esc(t.thesis)}">`).join('')}</datalist></label>
     <p class="fine">It fills at a market open after today, never at today's price.</p>
     <p class="flag" id="trade-err" role="alert"></p>
-    <div class="actions"><button class="btn quiet" value="cancel" formnovalidate>Cancel</button><button class="btn primary" value="place">Place paper order</button></div>
+    <div class="actions"><button type="button" class="btn quiet" id="trade-cancel">Cancel</button><button type="submit" class="btn primary" id="trade-place">Place paper order</button></div>
   </form>`;
   const f = $('#trade-form');
   const update = () => {
@@ -552,8 +567,8 @@ async function openTrade(ticker, side) {
   };
   f.addEventListener('input', update);
   update();
+  $('#trade-cancel').onclick = () => dlg.close();
   f.addEventListener('submit', async (e) => {
-    if (e.submitter?.value !== 'place') return; // Cancel closes the dialog
     e.preventDefault();
     const mode = f.mode.value, amt = parseFloat(f.amount.value);
     const body = { ticker: d.ticker, side, reason: f.reason.value, thesis: f.thesis.value, gtc: f.gtc.checked };
@@ -561,13 +576,18 @@ async function openTrade(ticker, side) {
     if (mode === 'shares') body.shares = amt;
     if (f.kind.value === 'limit') body.limit = parseFloat(f.limit.value);
     if (mode !== 'all' && !(amt > 0)) { $('#trade-err').textContent = 'Enter how much.'; return; }
+    const place = $('#trade-place');
+    place.disabled = true;
+    place.textContent = 'placing…';
     try {
       const r = await send('POST', '/api/orders', body);
       dlg.close();
-      toast(`Order #${r.id} placed. It fills at a market open after ${r.placedOn}.`);
+      toast(`Order #${r.id} placed: ${side} ${d.ticker}. It's listed as waiting until it fills at a market open after ${r.placedOn}.`, 'ok', 10000);
       route();
     } catch (err) {
       $('#trade-err').textContent = err.message;
+      place.disabled = false;
+      place.textContent = 'Place paper order';
     }
   });
   if (typeof dlg.showModal !== 'function') throw new Error('this browser is too old for the order ticket; please update it');
@@ -606,6 +626,11 @@ document.addEventListener('click', (e) => {
     case 'rm-level': run(() => send('DELETE', `/api/levels/${encodeURIComponent(ticker)}/${encodeURIComponent(name)}`), 'Level removed'); break;
     case 'cancel': if (confirm(`Cancel order #${id}?`)) run(() => send('POST', `/api/orders/${id}/cancel`), `Order #${id} cancelled`); break;
     case 'retire': if (confirm(`Retire the rule "${name}"? Its history is kept.`)) run(() => send('DELETE', `/api/rules/${encodeURIComponent(name)}`), 'Rule retired'); break;
+    case 'verdict': {
+      const percent = parseFloat(b.closest('form').elements.percent.value) || 0;
+      run(() => send('POST', '/api/reviews', { ticker, verdict, percent, note: '' }), `${ticker} marked ${verdict === 'ok' ? 'fine' : 'excluded'}`);
+      break;
+    }
     case 'quick-review': run(() => send('POST', '/api/reviews', { ticker, verdict, percent: 0, note: '' }), `${ticker} marked ${verdict === 'ok' ? 'fine' : 'excluded'}`); break;
     case 'example': { const input = b.closest('form').condition; input.value = cond; input.focus(); break; }
     case 'sync-spus': run(() => send('POST', '/api/sync-spus'), (r) => `${r.added} stocks added. Their data fills in over the next few hours.`).then(() => send('POST', '/api/refresh').catch(() => {})); break;
@@ -626,7 +651,7 @@ document.addEventListener('submit', (e) => {
     }
     case 'add-level': run(() => send('POST', '/api/levels', { ticker: f.dataset.ticker, name: v('name'), price: parseFloat(v('price')) }), 'Level saved'); break;
     case 'add-rule': run(() => send('POST', '/api/rules', { name: v('name'), ticker: v('ticker'), action: v('action'), thesis: v('thesis'), condition: v('condition') }), (r) => `Rule saved (version ${r.version})`); break;
-    case 'review': run(() => send('POST', '/api/reviews', { ticker: f.dataset.ticker, verdict: e.submitter.value, percent: parseFloat(v('percent')) || 0, note: '' }), 'Verdict saved'); break;
+    case 'review': break; // a verdict needs an explicit button press, not Enter
     case 'setting': run(() => send('POST', '/api/settings', { key: f.dataset.key, value: v('value') }), 'Saved; the simulation was re-run'); break;
     case 'setup': run(() => send('POST', '/api/setup', { tiingoKey: v('tiingoKey'), name: v('name'), email: v('email') }), 'Connected. Fetching data in the background.').then(() => send('POST', '/api/refresh').catch(() => {})); break;
   }

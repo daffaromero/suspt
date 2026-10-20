@@ -294,3 +294,8 @@ dialog#trade::backdrop { background: rgba(8, 11, 50, 0.72); backdrop-filter: blu
   #help-btn { display: none; }
   .detail-head .btn { padding: 4px 10px; }
 }
+
+.waiting { border: 1px solid var(--warning); border-radius: 10px; padding: 10px 14px; margin: 0 0 14px; background: rgba(250, 178, 25, 0.06); }
+.waiting .wo { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 4px 0; }
+.waiting .wo b { font-weight: 700; }
+.waiting .fine { margin: 6px 0 0; }
