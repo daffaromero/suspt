@@ -301,6 +301,8 @@ func newServer(a *app) http.Handler {
 
 	api("/api/summary", func(db *sql.DB, _ *http.Request) (any, error) { return portfolioSummary(db) })
 	api("/api/watchlist", func(db *sql.DB, _ *http.Request) (any, error) { return watchlistRows(db) })
+	api("/api/monitor", func(db *sql.DB, r *http.Request) (any, error) { return monitorReport(db, r.URL.Query().Get("since")) })
+	api("/api/ideas", func(db *sql.DB, _ *http.Request) (any, error) { return ideasReport(db) })
 	api("/api/journal", func(db *sql.DB, _ *http.Request) (any, error) { return journalReport(db) })
 	api("/api/signals", func(db *sql.DB, _ *http.Request) (any, error) { return currentSignals(db) })
 	api("/api/orders", func(db *sql.DB, _ *http.Request) (any, error) { return ordersJSON(db) })
