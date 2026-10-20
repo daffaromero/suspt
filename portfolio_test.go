@@ -61,7 +61,7 @@ func TestSimulateScenario(t *testing.T) {
 	if orders[0].FillQty != 0.99 || orders[2].FillPrice != 95 {
 		t.Errorf("fills: #1 qty %v want 0.99, #3 price %v want 95", orders[0].FillQty, orders[2].FillPrice)
 	}
-	if auto := s.orders[len(s.orders)-1]; len(s.orders) != 7 || !auto.auto || auto.Status != "filled" || auto.FilledOn != "2026-01-12" || !near(auto.FillQty, 3.98) {
+	if auto := s.orders[len(s.orders)-1]; len(s.orders) != 7 || !auto.auto || auto.Status != "filled" || auto.FilledOn != "2026-02-02" || !near(auto.FillQty, 3.98) {
 		t.Fatalf("compliance auto-sell missing or wrong: %+v", auto)
 	}
 	kinds := map[string]float64{}
@@ -74,7 +74,7 @@ func TestSimulateScenario(t *testing.T) {
 	realized := 0.0
 	for _, l := range s.lots {
 		realized += l.Realized
-		if l.OpenQty != 0 || l.ClosedOn != "2026-01-12" {
+		if l.OpenQty != 0 || l.ClosedOn != "2026-02-02" {
 			t.Errorf("lot %d not closed by the auto-sell: %+v", l.ID, l)
 		}
 	}
@@ -86,7 +86,7 @@ func TestSimulateScenario(t *testing.T) {
 	if !near(last.Cash, 353.49) || last.Contrib != 350 || last.Holdings != 0 {
 		t.Errorf("final cash %v contrib %v holdings %v, want 353.49 350 0", last.Cash, last.Contrib, last.Holdings)
 	}
-	// Benchmark: $300 buys 29.9 @ 10 on 01-06 ($1 fee), $50 buys 4.9 on 02-03.
+	// Benchmark: $300 buys 29.9 @ 10 at the 01-05 open ($1 fee), $50 buys 4.9 at the 02-02 open.
 	if !near(last.Bench, 348) {
 		t.Errorf("benchmark = %v, want 348", last.Bench)
 	}
@@ -99,5 +99,33 @@ func TestTWRAndDeposits(t *testing.T) {
 	d := depositDates(testSettings(map[string]string{"start_date": "2026-01-31", "deposit_day": "31"}), "2026-03-31")
 	if d["2026-01-31"] != 300 || d["2026-02-28"] != 50 || d["2026-03-31"] != 50 || len(d) != 3 {
 		t.Errorf("deposit dates = %v", d)
+	}
+}
+
+func TestReviewRegressions(t *testing.T) {
+	bar := func(d string, o, l float64, split float64) ohlc {
+		return ohlc{Date: d, Open: o, High: o, Low: l, Close: o, Split: split}
+	}
+	bm := []ohlc{bar("2026-01-05", 10, 10, 1), bar("2026-01-06", 10, 10, 1), bar("2026-01-07", 10, 10, 1), bar("2026-01-08", 10, 10, 1)}
+	set := testSettings(map[string]string{"start_date": "2026-01-05", "benchmark": "BM"})
+
+	// A GTC limit buy is not rejected on a non-compliant day when it would not have filled anyway.
+	aaa := []ohlc{bar("2026-01-05", 100, 100, 1), bar("2026-01-06", 100, 99, 1), bar("2026-01-07", 100, 99, 1), bar("2026-01-08", 90, 90, 1)}
+	screens := map[string][]screenPoint{"AAA": {
+		{AsOf: "2026-01-02", Status: "COMPLIANT"}, {AsOf: "2026-01-05", Status: "NON_COMPLIANT"}, {AsOf: "2026-01-07", Status: "COMPLIANT"}}}
+	o := &order{ID: 1, PlacedOn: "2026-01-05", Ticker: "AAA", Side: "buy", Qty: f(1), Limit: f(95), GTC: true}
+	simulate(set, []*order{o}, map[string][]ohlc{"BM": bm, "AAA": aaa}, screens)
+	if o.Status != "filled" || o.FilledOn != "2026-01-08" || o.FillPrice != 90 {
+		t.Errorf("GTC across a non-compliant month: %s %s @ %v (%s), want filled 2026-01-08 @ 90", o.Status, o.FilledOn, o.FillPrice, o.Note)
+	}
+
+	// A 2:1 split doubles an open GTC sell's quantity and halves its limit.
+	bbb := []ohlc{bar("2026-01-05", 100, 100, 1), bar("2026-01-06", 100, 100, 1), bar("2026-01-07", 50, 50, 2), bar("2026-01-08", 61, 61, 1)}
+	screens = map[string][]screenPoint{"BBB": {{AsOf: "2026-01-02", Status: "COMPLIANT"}}}
+	buy := &order{ID: 1, PlacedOn: "2026-01-02", Ticker: "BBB", Side: "buy", Qty: f(1)}
+	sell := &order{ID: 2, PlacedOn: "2026-01-05", Ticker: "BBB", Side: "sell", Qty: f(1), Limit: f(120), GTC: true}
+	s := simulate(set, []*order{buy, sell}, map[string][]ohlc{"BM": bm, "BBB": bbb}, screens)
+	if sell.Status != "filled" || sell.FillQty != 2 || sell.FillPrice != 61 || s.held("BBB") != 0 {
+		t.Errorf("split-adjusted sell: %s qty %v @ %v, held %v; want filled 2 @ 61, held 0", sell.Status, sell.FillQty, sell.FillPrice, s.held("BBB"))
 	}
 }

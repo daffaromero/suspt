@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS screens (
 	debt_ratio REAL, cash_ratio REAL, npi_ratio REAL, purification_ratio REAL,
 	streak INTEGER NOT NULL,
 	note TEXT,
+	provisional INTEGER NOT NULL DEFAULT 0,
 	PRIMARY KEY (ticker, as_of)
 );
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -157,6 +158,11 @@ func openDB(path string) (*sql.DB, error) {
 		return nil, err
 	}
 	if _, err := db.Exec(schema); err != nil {
+		db.Close()
+		return nil, err
+	}
+	// Migration for databases created before screens had the column; screens is derived data.
+	if _, err := db.Exec(`ALTER TABLE screens ADD COLUMN provisional INTEGER NOT NULL DEFAULT 0`); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 		db.Close()
 		return nil, err
 	}

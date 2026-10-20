@@ -340,7 +340,8 @@ func nextState(prev screenState, worst float64) screenState {
 type screenRow struct {
 	AsOf, Status, Business string
 	ratios
-	Streak int
+	Streak      int
+	Provisional bool // current month: shown, but never gates fills until the month is final
 }
 
 func screenTicker(db *sql.DB, ticker string) ([]screenRow, error) {
@@ -418,7 +419,8 @@ func screenTicker(db *sql.DB, ticker string) ([]screenRow, error) {
 			business, np = verdict.String, npFrac
 		}
 		r, ok := evaluate(facts, months, splits, i, np)
-		row := screenRow{AsOf: months[i].Date, Business: business, ratios: r, Status: "NO_DATA"}
+		row := screenRow{AsOf: months[i].Date, Business: business, ratios: r, Status: "NO_DATA",
+			Provisional: i == len(months)-1 && months[i].Date[:7] >= nyToday()[:7]}
 		if business == "review" {
 			row.Notes = append(row.Notes, fmt.Sprintf("SIC %s %s: record a verdict with `suspt review`", sic, sicDesc))
 		}
@@ -438,9 +440,9 @@ func screenTicker(db *sql.DB, ticker string) ([]screenRow, error) {
 		return nil, err
 	}
 	for _, r := range rows {
-		if _, err := tx.Exec(`INSERT INTO screens (ticker, as_of, status, business, debt_ratio, cash_ratio, npi_ratio, purification_ratio, streak, note)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			ticker, r.AsOf, r.Status, r.Business, nullable(r.Debt), nullable(r.Cash), nullable(r.NPI), nullable(r.Purif), r.Streak, strings.Join(r.Notes, "; ")); err != nil {
+		if _, err := tx.Exec(`INSERT INTO screens (ticker, as_of, status, business, debt_ratio, cash_ratio, npi_ratio, purification_ratio, streak, note, provisional)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			ticker, r.AsOf, r.Status, r.Business, nullable(r.Debt), nullable(r.Cash), nullable(r.NPI), nullable(r.Purif), r.Streak, strings.Join(r.Notes, "; "), r.Provisional); err != nil {
 			return nil, err
 		}
 	}

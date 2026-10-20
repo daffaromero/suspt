@@ -209,7 +209,7 @@ type screenPoint struct {
 }
 
 func loadScreenPoints(db *sql.DB, ticker string) ([]screenPoint, error) {
-	rs, err := db.Query(`SELECT as_of, status, purification_ratio FROM screens WHERE ticker = ? ORDER BY as_of`, ticker)
+	rs, err := db.Query(`SELECT as_of, status, purification_ratio FROM screens WHERE ticker = ? AND provisional = 0 ORDER BY as_of`, ticker)
 	if err != nil {
 		return nil, err
 	}
@@ -230,11 +230,12 @@ func loadScreenPoints(db *sql.DB, ticker string) ([]screenPoint, error) {
 	return out, rs.Err()
 }
 
-// statusAt returns the latest screen evaluated on or before date.
+// statusAt returns the screen in force on date: the latest one evaluated strictly before
+// it, because a screen uses that day's close and so cannot gate that day's open.
 func statusAt(pts []screenPoint, date string) (screenPoint, bool) {
-	i := sort.Search(len(pts), func(i int) bool { return pts[i].AsOf > date })
+	i := sort.Search(len(pts), func(i int) bool { return pts[i].AsOf >= date })
 	if i == 0 {
-		return screenPoint{}, false
+		return screenPoint{Purif: math.NaN()}, false
 	}
 	return pts[i-1], true
 }
@@ -338,13 +339,6 @@ func (s *sim) reject(o *order, format string, args ...any) {
 
 // execute tries order o on bar b (day t) and reports whether it is done (filled or rejected).
 func (s *sim) execute(o *order, b ohlc, t string) bool {
-	if o.Side == "buy" && !slices.Contains(s.etfs, o.Ticker) {
-		p, ok := statusAt(s.screens[o.Ticker], t)
-		if !ok || p.Status != "COMPLIANT" {
-			s.reject(o, "%s not COMPLIANT on %s (%s)", o.Ticker, t, orDefault(p.Status, "no screen"))
-			return true
-		}
-	}
 	if o.Side == "sell" && s.held(o.Ticker) <= 1e-9 {
 		s.reject(o, "no %s position", o.Ticker)
 		return true
@@ -352,6 +346,13 @@ func (s *sim) execute(o *order, b ohlc, t string) bool {
 	price, ok := fillPrice(o, b)
 	if !ok {
 		return false
+	}
+	if o.Side == "buy" && !slices.Contains(s.etfs, o.Ticker) {
+		p, ok := statusAt(s.screens[o.Ticker], t)
+		if !ok || p.Status != "COMPLIANT" {
+			s.reject(o, "%s not COMPLIANT on %s (%s)", o.Ticker, t, orDefault(p.Status, "no screen"))
+			return true
+		}
 	}
 
 	if o.Side == "buy" {
@@ -437,13 +438,19 @@ func (s *sim) consume(ticker string, q, net float64, t string) float64 {
 // corporateActions applies splits, then dividends to holdings as of the previous close.
 func (s *sim) corporateActions(t string) {
 	wh := s.set.num("dividend_withholding") / 100
-	tickers := map[string]bool{}
+	var tickers []string
 	for _, l := range s.lots {
 		if l.OpenQty > 0 {
-			tickers[l.Ticker] = true
+			tickers = append(tickers, l.Ticker)
 		}
 	}
-	for tk := range tickers {
+	for _, o := range s.orders {
+		if o.Status == "open" {
+			tickers = append(tickers, o.Ticker)
+		}
+	}
+	slices.Sort(tickers)
+	for _, tk := range slices.Compact(tickers) {
 		b, ok := s.prices[tk][t]
 		if !ok {
 			continue
@@ -455,9 +462,20 @@ func (s *sim) corporateActions(t string) {
 					l.OpenQty *= b.Split
 				}
 			}
+			// Open orders keep their post-split meaning: same stake, same price level.
+			for _, o := range s.orders {
+				if o.Ticker == tk && o.Status == "open" && o.PlacedOn < t {
+					if o.Qty.Valid {
+						o.Qty.Float64 *= b.Split
+					}
+					if o.Limit.Valid {
+						o.Limit.Float64 /= b.Split
+					}
+				}
+			}
 			s.log(entry{Date: t, Kind: "split", Ticker: tk, Qty: b.Split, Note: fmt.Sprintf("%g:1 split", b.Split)})
 		}
-		if b.Div > 0 {
+		if b.Div > 0 && s.held(tk) > 0 {
 			held := s.held(tk)
 			gross := round2(held * b.Div)
 			p, _ := statusAt(s.screens[tk], t)
@@ -575,7 +593,6 @@ func simulate(set settings, orders []*order, prices map[string][]ohlc, screens m
 			continue
 		}
 		s.corporateActions(t)
-		s.benchInvest(t) // cash that arrived before today buys the benchmark at today's open
 		for _, d := range depositOrder {
 			if d > prev && d <= t {
 				amt := deposits[d]
@@ -583,6 +600,7 @@ func simulate(set settings, orders []*order, prices map[string][]ohlc, screens m
 				s.log(entry{Date: t, Kind: "deposit", Amount: amt, Note: "scheduled " + d})
 			}
 		}
+		s.benchInvest(t)                               // deposits land before the open, so the benchmark buys at today's open
 		for _, side := range []string{"sell", "buy"} { // sells first so their cash funds same-day buys
 			for _, o := range s.orders {
 				if o.Side != side || o.Status != "open" || o.PlacedOn >= t {
@@ -702,9 +720,12 @@ func parseArgs(fs *flag.FlagSet, args []string) ([]string, error) {
 	}
 }
 
-func latestStatus(db *sql.DB, ticker string) (string, string) {
+// latestStatus is the newest screen; confirmedOnly skips the provisional current month,
+// matching what replay uses to gate fills.
+func latestStatus(db *sql.DB, ticker string, confirmedOnly bool) (string, string) {
 	var status, note string
-	err := db.QueryRow(`SELECT status, COALESCE(note, '') FROM screens WHERE ticker = ? ORDER BY as_of DESC LIMIT 1`, ticker).Scan(&status, &note)
+	err := db.QueryRow(`SELECT status, COALESCE(note, '') FROM screens WHERE ticker = ? AND provisional <= ? ORDER BY as_of DESC LIMIT 1`,
+		ticker, !confirmedOnly).Scan(&status, &note)
 	if err != nil {
 		return "NO_SCREEN", "run `suspt screen " + ticker + "`"
 	}
@@ -765,8 +786,11 @@ func runOrder(db *sql.DB, side string, args []string) error {
 		return fmt.Errorf("no prices for %s: run `suspt ingest %s` first", o.Ticker, o.Ticker)
 	}
 	if side == "buy" && !slices.Contains(set.etfs(), o.Ticker) {
-		if status, note := latestStatus(db, o.Ticker); status != "COMPLIANT" {
-			return fmt.Errorf("%s is %s, buy refused %s", o.Ticker, status, note)
+		if status, note := latestStatus(db, o.Ticker, true); status != "COMPLIANT" {
+			if cur, _ := latestStatus(db, o.Ticker, false); cur == "COMPLIANT" {
+				note += " (the current month shows COMPLIANT; it takes effect when the month's screen is final)"
+			}
+			return fmt.Errorf("%s is %s as of the last monthly screen, buy refused %s", o.Ticker, status, note)
 		}
 	}
 	o.PlacedOn = nyToday()

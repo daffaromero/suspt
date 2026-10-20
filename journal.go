@@ -183,7 +183,7 @@ func portfolioSummary(db *sql.DB) (summary, error) {
 		p.PnL = p.Value - p.Cost
 		p.Status = "FUND"
 		if !slices.Contains(set.etfs(), p.Ticker) {
-			p.Status, _ = latestStatus(db, p.Ticker)
+			p.Status, _ = latestStatus(db, p.Ticker, false)
 		}
 		bySector[p.Sector] += p.Value
 	}

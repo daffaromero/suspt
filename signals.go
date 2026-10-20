@@ -380,7 +380,7 @@ func tickerStatus(db *sql.DB, set settings, t string) string {
 	if slices.Contains(set.etfs(), t) {
 		return "FUND"
 	}
-	s, _ := latestStatus(db, t)
+	s, _ := latestStatus(db, t, false)
 	return s
 }
 
