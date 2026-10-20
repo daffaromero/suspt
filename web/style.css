@@ -1,6 +1,7 @@
 /* Night-terminal look after getinsomnia.app: navy, monospace UI, serif numbers,
    dashed hairlines, yellow keys. Chart series colors are validated for CVD on --surface. */
 :root {
+  --top-h: 38px; /* header height; two rows on phones */
   color-scheme: dark;
   --bg: #0e1450;
   --bg-deep: #0b1046;
@@ -33,7 +34,7 @@ body {
   color: var(--text);
   font: 13px/1.5 var(--mono);
   min-height: 100vh;
-  padding: 44px 0 52px;
+  padding: calc(var(--top-h) + 6px) 0 52px;
 }
 a { color: inherit; }
 ::selection { background: var(--accent); color: var(--bg); }
@@ -307,7 +308,7 @@ dialog#trade::backdrop { background: rgba(8, 11, 50, 0.72); backdrop-filter: blu
 body.practice .mode button[aria-pressed="true"] { background: var(--warning); }
 body.practice .top { border-bottom: 2px solid var(--warning); }
 .practice-bar {
-  position: sticky; top: 38px; z-index: 9; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px;
+  position: sticky; top: var(--top-h); z-index: 9; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px;
   padding: 8px 16px; background: linear-gradient(rgba(250, 178, 25, 0.12), rgba(250, 178, 25, 0.12)), var(--bg-deep);
   border-bottom: 1px dashed var(--warning); color: var(--text);
 }
@@ -332,3 +333,11 @@ body.practice .top { border-bottom: 2px solid var(--warning); }
 .tabs button[aria-pressed="true"] { color: var(--text); border-bottom-color: var(--accent); }
 .list .t .star { color: var(--accent); margin-right: 4px; }
 .btn.starred { color: var(--accent); border-color: var(--accent); }
+
+/* phones: the header becomes two rows so every page stays one tap away */
+@media (max-width: 900px) {
+  :root { --top-h: 78px; }
+  .top { height: var(--top-h); flex-wrap: wrap; align-content: flex-start; row-gap: 0; padding-top: 4px; }
+  #nav { order: 10; flex: 1 0 100%; }
+  #nav a { padding: 6px 8px 5px; }
+}
