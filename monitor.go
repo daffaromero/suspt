@@ -296,7 +296,7 @@ type idea struct {
 	Title   string `json:"title"`
 	Because string `json:"because"`
 	Action  string `json:"action,omitempty"` // buy, sell, open, journal, screen, rules, shortlist
-	Rule    string `json:"rule"`            // the plain rule that produced it
+	Rule    string `json:"rule"`             // the plain rule that produced it
 }
 
 // ideasReport turns the account and the shortlist into suggestions. Each kind is one
