@@ -172,13 +172,36 @@ func openDB(path string) (*sql.DB, error) {
 func mustEnv(name string) string {
 	v := os.Getenv(name)
 	if v == "" {
-		log.Fatalf("%s is not set (see .env.example)", name)
+		log.Fatalf("%s is not set: add it to .env in this folder (see .env.example)", name)
 	}
 	return v
 }
 
+// loadDotEnv sets KEY=VALUE pairs from path that the environment doesn't already define.
+func loadDotEnv(path string) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimPrefix(strings.TrimSpace(line), "export ")
+		k, v, ok := strings.Cut(line, "=")
+		if !ok || strings.HasPrefix(line, "#") {
+			continue
+		}
+		k, v = strings.TrimSpace(k), strings.TrimSpace(v)
+		if len(v) >= 2 && (v[0] == '"' || v[0] == '\'') && v[len(v)-1] == v[0] {
+			v = v[1 : len(v)-1]
+		}
+		if _, set := os.LookupEnv(k); !set && k != "" && v != "" {
+			os.Setenv(k, v)
+		}
+	}
+}
+
 func main() {
 	log.SetFlags(0)
+	loadDotEnv(".env")
 	if len(os.Args) < 2 {
 		log.Fatal(usage)
 	}

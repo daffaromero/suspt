@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -101,5 +102,21 @@ func TestIngestEdgar(t *testing.T) {
 	}
 	if sic != "3571" || facts != 3 || nullFY != 1 {
 		t.Fatalf("sic=%s facts=%d nullFY=%d, want 3571 3 1", sic, facts, nullFY)
+	}
+}
+
+func TestLoadDotEnv(t *testing.T) {
+	p := filepath.Join(t.TempDir(), ".env")
+	os.WriteFile(p, []byte("# comment\nSUSPT_T_A=plain\nexport SUSPT_T_B=\"Name you@example.com\"\nSUSPT_T_C=from-file\nSUSPT_T_D=\n"), 0o600)
+	t.Setenv("SUSPT_T_C", "from-shell")
+	loadDotEnv(p)
+	for k, want := range map[string]string{"SUSPT_T_A": "plain", "SUSPT_T_B": "Name you@example.com", "SUSPT_T_C": "from-shell"} {
+		if got := os.Getenv(k); got != want {
+			t.Errorf("%s = %q, want %q", k, got, want)
+		}
+		os.Unsetenv(k)
+	}
+	if _, set := os.LookupEnv("SUSPT_T_D"); set {
+		t.Error("empty value should not be set")
 	}
 }

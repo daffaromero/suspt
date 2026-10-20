@@ -1,4 +1,4 @@
-Classification: INTERNAL (personal project)
+Classification: PUBLIC (personal project)
 
 # suspt
 
@@ -18,8 +18,7 @@ One Go binary, one SQLite file, a CLI for every change and a read-only dashboard
 ## Setup
 
 ```sh
-cp .env.example .env            # fill in TIINGO_API_KEY and SEC_USER_AGENT (quoted)
-set -a; . ./.env; set +a
+cp .env.example .env            # fill in TIINGO_API_KEY and SEC_USER_AGENT; suspt reads ./.env itself
 go build -o suspt .
 ./suspt watch NVDA AAPL MSFT    # what you follow
 ./suspt update                  # fetch, screen, replay, report (run daily after the US close)
