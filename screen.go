@@ -352,15 +352,11 @@ func screenTicker(db *sql.DB, ticker string) ([]screenRow, error) {
 	} else if err != nil {
 		return nil, err
 	}
-	business := sicVerdict(sic)
-	var verdict sql.NullString
+	var verdict, reviewedOn sql.NullString
 	var npFrac float64
-	err = db.QueryRow(`SELECT verdict, nonpermissible_revenue FROM business_reviews WHERE ticker = ?`, ticker).Scan(&verdict, &npFrac)
+	err = db.QueryRow(`SELECT verdict, nonpermissible_revenue, reviewed_on FROM business_reviews WHERE ticker = ?`, ticker).Scan(&verdict, &npFrac, &reviewedOn)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
-	}
-	if verdict.Valid {
-		business = verdict.String
 	}
 
 	args := []any{cik}
@@ -415,9 +411,15 @@ func screenTicker(db *sql.DB, ticker string) ([]screenRow, error) {
 	var st screenState
 	var rows []screenRow
 	for i := min(spAvgMonths-1, len(months)-1); i < len(months); i++ {
-		r, ok := evaluate(facts, months, splits, i, npFrac)
+		// A manual verdict only applies from the day it was made, so it can't rewrite past
+		// fills. The provisional current month always shows it.
+		business, np := sicVerdict(sic), 0.0
+		if verdict.Valid && (reviewedOn.String <= months[i].Date || i == len(months)-1) {
+			business, np = verdict.String, npFrac
+		}
+		r, ok := evaluate(facts, months, splits, i, np)
 		row := screenRow{AsOf: months[i].Date, Business: business, ratios: r, Status: "NO_DATA"}
-		if business == "review" && !verdict.Valid {
+		if business == "review" {
 			row.Notes = append(row.Notes, fmt.Sprintf("SIC %s %s: record a verdict with `suspt review`", sic, sicDesc))
 		}
 		if ok {
@@ -515,6 +517,6 @@ func runReview(db *sql.DB, args []string) error {
 		return fmt.Errorf("non-permissible revenue must be a percent in [0, 100), got %v", pctVal)
 	}
 	_, err := db.Exec(`INSERT OR REPLACE INTO business_reviews (ticker, verdict, nonpermissible_revenue, note, reviewed_on)
-		VALUES (?, ?, ?, ?, date('now'))`, strings.ToUpper(args[0]), args[1], pctVal/100, strings.Join(rest, " "))
+		VALUES (?, ?, ?, ?, ?)`, strings.ToUpper(args[0]), args[1], pctVal/100, strings.Join(rest, " "), nyToday())
 	return err
 }

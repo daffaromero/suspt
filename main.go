@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	_ "time/tzdata" // order dates use New York time on any machine
+
 	_ "modernc.org/sqlite"
 )
 
@@ -59,12 +61,64 @@ CREATE TABLE IF NOT EXISTS screens (
 	note TEXT,
 	PRIMARY KEY (ticker, as_of)
 );
+CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS sectors (ticker TEXT PRIMARY KEY, sector TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS orders (
+	id INTEGER PRIMARY KEY,
+	placed_on TEXT NOT NULL,
+	ticker TEXT NOT NULL,
+	side TEXT NOT NULL CHECK (side IN ('buy', 'sell')),
+	qty REAL CHECK (qty > 0),           -- shares
+	notional REAL CHECK (notional > 0), -- USD; a sell with neither sells the whole position
+	limit_price REAL CHECK (limit_price > 0),
+	gtc INTEGER NOT NULL DEFAULT 0,
+	reason TEXT NOT NULL CHECK (length(trim(reason)) > 0),
+	thesis TEXT NOT NULL CHECK (length(trim(thesis)) > 0),
+	cancelled_on TEXT,
+	-- outcome, rewritten by every replay
+	status TEXT NOT NULL DEFAULT 'open',
+	filled_on TEXT, fill_price REAL, fill_qty REAL, fee REAL, realized_pnl REAL, note TEXT
+);
+-- Derived by replay from orders, settings, prices and screens; safe to delete.
+CREATE TABLE IF NOT EXISTS ledger (
+	id INTEGER PRIMARY KEY,
+	date TEXT NOT NULL,
+	kind TEXT NOT NULL, -- deposit, buy, sell, dividend, withholding, purification, split, alert
+	ticker TEXT, qty REAL, price REAL,
+	amount REAL NOT NULL, -- cash effect, negative = out
+	fee REAL NOT NULL DEFAULT 0,
+	order_id INTEGER, realized_pnl REAL, note TEXT
+);
+CREATE TABLE IF NOT EXISTS lots (
+	id INTEGER PRIMARY KEY,
+	order_id INTEGER NOT NULL,
+	ticker TEXT NOT NULL, thesis TEXT NOT NULL,
+	opened_on TEXT NOT NULL, closed_on TEXT,
+	qty REAL NOT NULL, cost REAL NOT NULL,
+	open_qty REAL NOT NULL, open_cost REAL NOT NULL,
+	realized REAL NOT NULL, income REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS equity (
+	date TEXT PRIMARY KEY,
+	cash REAL NOT NULL, holdings REAL NOT NULL, value REAL NOT NULL,
+	contributions REAL NOT NULL, bench_value REAL NOT NULL
+);
 `
 
 const usage = `usage:
   suspt ingest TICKER...                          fetch prices (Tiingo) and fundamentals (SEC EDGAR)
   suspt screen [TICKER...]                        run the S&P Shariah screen (default: all ingested companies)
-  suspt review TICKER ok|excluded [PCT] [NOTE...] record a business-activity verdict; PCT = non-permissible revenue %`
+  suspt review TICKER ok|excluded [PCT] [NOTE...] record a business-activity verdict; PCT = non-permissible revenue %
+
+  suspt buy TICKER (QTY|-usd AMOUNT) [-limit P] [-gtc] -reason TEXT -thesis TAG
+  suspt sell TICKER (QTY|all|-usd AMOUNT) [-limit P] [-gtc] -reason TEXT -thesis TAG
+  suspt cancel ORDER_ID
+  suspt orders                                    list orders and their outcome
+  suspt portfolio                                 cash, positions, P&L, benchmark, concentration flags
+  suspt journal                                   which reasons and theses worked
+  suspt config [KEY VALUE]                        show or change settings (deposits, fees, rules)
+  suspt sector TICKER NAME                        override the SIC-derived sector ("auto" to reset)
+  suspt run                                       replay the paper account (no network)`
 
 var httpClient = &http.Client{Timeout: time.Minute}
 
@@ -114,6 +168,24 @@ func main() {
 		err = runScreen(db, args)
 	case "review":
 		err = runReview(db, args)
+	case "buy", "sell":
+		err = runOrder(db, os.Args[1], args)
+	case "cancel":
+		err = runCancel(db, args)
+	case "orders":
+		err = runOrders(db)
+	case "portfolio":
+		err = runPortfolio(db)
+	case "journal":
+		err = runJournal(db)
+	case "config":
+		err = runConfig(db, args)
+	case "sector":
+		err = runSector(db, args)
+	case "run":
+		if err = replay(db); err == nil {
+			err = runPortfolio(db)
+		}
 	default:
 		err = errors.New(usage)
 	}

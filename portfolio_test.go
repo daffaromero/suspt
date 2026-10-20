@@ -1,0 +1,103 @@
+package main
+
+import (
+	"database/sql"
+	"maps"
+	"math"
+	"testing"
+)
+
+func testSettings(over map[string]string) settings {
+	s := settings{}
+	for _, d := range settingDefaults {
+		s[d.Key] = d.Default
+	}
+	maps.Copy(s, over)
+	return s
+}
+
+func f(v float64) sql.NullFloat64 { return sql.NullFloat64{Float64: v, Valid: true} }
+
+func near(a, b float64) bool { return math.Abs(a-b) < 1e-6 }
+
+func TestSimulateScenario(t *testing.T) {
+	flat := func(d string, px float64) ohlc {
+		return ohlc{Date: d, Open: px, High: px, Low: px, Close: px, Split: 1}
+	}
+	days := []string{"2026-01-05", "2026-01-06", "2026-01-07", "2026-01-08", "2026-01-09", "2026-01-12", "2026-02-02", "2026-02-03"}
+	var bm, bbb []ohlc
+	for _, d := range days {
+		bm, bbb = append(bm, flat(d, 10)), append(bbb, flat(d, 10))
+	}
+	aaa := []ohlc{
+		{Date: "2026-01-05", Open: 100, High: 101, Low: 99, Close: 100, Split: 1},
+		{Date: "2026-01-06", Open: 100, High: 100, Low: 95, Close: 96, Split: 1}, // touches 95, not 90
+		{Date: "2026-01-07", Open: 94, High: 95, Low: 93, Close: 94, Split: 1},
+		{Date: "2026-01-08", Open: 47, High: 48, Low: 46, Close: 47, Split: 2},
+		{Date: "2026-01-09", Open: 47, High: 47, Low: 47, Close: 47, Split: 1, Div: 0.5},
+		flat("2026-01-12", 50), flat("2026-02-02", 50), flat("2026-02-03", 50),
+	}
+	screens := map[string][]screenPoint{
+		"AAA": {{AsOf: "2025-12-31", Status: "COMPLIANT", Purif: 0.1}, {AsOf: "2026-01-09", Status: "NON_COMPLIANT", Purif: 0.1}},
+	}
+	orders := []*order{
+		{ID: 1, PlacedOn: "2026-01-02", Ticker: "AAA", Side: "buy", Notional: f(100), Reason: "r", Thesis: "a"},
+		{ID: 2, PlacedOn: "2026-01-05", Ticker: "AAA", Side: "buy", Qty: f(1), Limit: f(90), Reason: "r", Thesis: "a"},
+		{ID: 3, PlacedOn: "2026-01-05", Ticker: "AAA", Side: "buy", Qty: f(1), Limit: f(95), GTC: true, Reason: "r", Thesis: "b"},
+		{ID: 4, PlacedOn: "2026-01-05", Ticker: "BBB", Side: "buy", Qty: f(1), Reason: "r", Thesis: "a"},
+		{ID: 5, PlacedOn: "2026-01-06", Ticker: "AAA", Side: "buy", Qty: f(10), Reason: "r", Thesis: "a"},
+		{ID: 6, PlacedOn: "2026-01-06", Ticker: "AAA", Side: "buy", Qty: f(1), Limit: f(99), GTC: true, Reason: "r", Thesis: "a",
+			CancelledOn: sql.NullString{String: "2026-01-06", Valid: true}},
+	}
+	set := testSettings(map[string]string{"start_date": "2026-01-05", "benchmark": "BM", "fee_flat": "1", "dividend_withholding": "15"})
+	s := simulate(set, orders, map[string][]ohlc{"BM": bm, "AAA": aaa, "BBB": bbb}, screens)
+
+	want := []string{"filled", "expired", "filled", "rejected", "rejected", "cancelled"}
+	for i, o := range orders[:6] {
+		if o.Status != want[i] {
+			t.Errorf("order %d: status %s (%s), want %s", o.ID, o.Status, o.Note, want[i])
+		}
+	}
+	if orders[0].FillQty != 0.99 || orders[2].FillPrice != 95 {
+		t.Errorf("fills: #1 qty %v want 0.99, #3 price %v want 95", orders[0].FillQty, orders[2].FillPrice)
+	}
+	if auto := s.orders[len(s.orders)-1]; len(s.orders) != 7 || !auto.auto || auto.Status != "filled" || auto.FilledOn != "2026-01-12" || !near(auto.FillQty, 3.98) {
+		t.Fatalf("compliance auto-sell missing or wrong: %+v", auto)
+	}
+	kinds := map[string]float64{}
+	for _, e := range s.ledger {
+		kinds[e.Kind] += e.Amount
+	}
+	if !near(kinds["dividend"], 1.99) || !near(kinds["withholding"], -0.30) || !near(kinds["purification"], -0.20) {
+		t.Errorf("dividend legs = %v", kinds)
+	}
+	realized := 0.0
+	for _, l := range s.lots {
+		realized += l.Realized
+		if l.OpenQty != 0 || l.ClosedOn != "2026-01-12" {
+			t.Errorf("lot %d not closed by the auto-sell: %+v", l.ID, l)
+		}
+	}
+	if !near(realized, 2.0) {
+		t.Errorf("realized = %v, want 2.00 (sold 3.98 @ 50 - $1 fee vs $196 cost)", realized)
+	}
+	last := s.snaps[len(s.snaps)-1]
+	// 300 - 100 - 96 + 1.49 net dividend + 198 sale + 50 deposit on 02-02 (Feb 1 is a Sunday)
+	if !near(last.Cash, 353.49) || last.Contrib != 350 || last.Holdings != 0 {
+		t.Errorf("final cash %v contrib %v holdings %v, want 353.49 350 0", last.Cash, last.Contrib, last.Holdings)
+	}
+	// Benchmark: $300 buys 29.9 @ 10 on 01-06 ($1 fee), $50 buys 4.9 on 02-03.
+	if !near(last.Bench, 348) {
+		t.Errorf("benchmark = %v, want 348", last.Bench)
+	}
+}
+
+func TestTWRAndDeposits(t *testing.T) {
+	if got := twr([]float64{100, 110, 165}, []float64{100, 100, 150}); !near(got, 0.134375) {
+		t.Errorf("twr = %v, want 0.134375", got)
+	}
+	d := depositDates(testSettings(map[string]string{"start_date": "2026-01-31", "deposit_day": "31"}), "2026-03-31")
+	if d["2026-01-31"] != 300 || d["2026-02-28"] != 50 || d["2026-03-31"] != 50 || len(d) != 3 {
+		t.Errorf("deposit dates = %v", d)
+	}
+}
