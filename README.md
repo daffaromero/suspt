@@ -1,8 +1,6 @@
-Classification: PUBLIC (personal project)
-
 # suspt
 
-Sharia-compliant US stock **paper-trading** tracker. Simulation only: no brokerage, no real orders.
+A Sharia-compliant US stock tracker. Simulation only: no brokerage, no real orders. Made for learning purposes only.
 One Go binary, one SQLite file, a CLI for every change and a read-only dashboard.
 
 ## Decisions
