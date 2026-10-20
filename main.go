@@ -63,6 +63,21 @@ CREATE TABLE IF NOT EXISTS screens (
 );
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS sectors (ticker TEXT PRIMARY KEY, sector TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS watchlist (ticker TEXT PRIMARY KEY, added_on TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS levels (
+	ticker TEXT NOT NULL, name TEXT NOT NULL, price REAL NOT NULL CHECK (price > 0),
+	PRIMARY KEY (ticker, name)
+);
+-- Rules are never edited: a change adds a new version and retires the old one.
+CREATE TABLE IF NOT EXISTS rules (
+	id INTEGER PRIMARY KEY,
+	name TEXT NOT NULL, version INTEGER NOT NULL,
+	ticker TEXT NOT NULL, -- or * for the whole watchlist
+	action TEXT NOT NULL CHECK (action IN ('BUY', 'WATCH')),
+	thesis TEXT NOT NULL, condition TEXT NOT NULL,
+	created_on TEXT NOT NULL, retired_on TEXT,
+	UNIQUE (name, version)
+);
 CREATE TABLE IF NOT EXISTS orders (
 	id INTEGER PRIMARY KEY,
 	placed_on TEXT NOT NULL,
@@ -106,7 +121,17 @@ CREATE TABLE IF NOT EXISTS equity (
 `
 
 const usage = `usage:
-  suspt ingest TICKER...                          fetch prices (Tiingo) and fundamentals (SEC EDGAR)
+  suspt update                                    daily routine: ingest watchlist + holdings + benchmark, screen, replay, signals
+
+  suspt watch [TICKER...]                         show the watchlist, or add tickers
+  suspt unwatch TICKER...
+  suspt level TICKER NAME PRICE|rm                set a key level (usable in rules as level:NAME)
+  suspt rule add NAME TICKER|* BUY|WATCH THESIS "CONDITION"   e.g. "close crosses_above sma200 and chg > 1"
+  suspt rule rm NAME
+  suspt rules [-all]                              active rules (-all includes retired versions)
+  suspt signals                                   rules firing on the latest bar
+
+  suspt ingest TICKER...                        fetch prices (Tiingo) and fundamentals (SEC EDGAR)
   suspt screen [TICKER...]                        run the S&P Shariah screen (default: all ingested companies)
   suspt review TICKER ok|excluded [PCT] [NOTE...] record a business-activity verdict; PCT = non-permissible revenue %
 
@@ -182,6 +207,20 @@ func main() {
 		err = runConfig(db, args)
 	case "sector":
 		err = runSector(db, args)
+	case "watch":
+		err = runWatch(db, args)
+	case "unwatch":
+		err = runUnwatch(db, args)
+	case "level":
+		err = runLevel(db, args)
+	case "rule":
+		err = runRule(db, args)
+	case "rules":
+		err = runRules(db, args)
+	case "signals":
+		err = runSignals(db)
+	case "update":
+		err = runUpdate(db)
 	case "run":
 		if err = replay(db); err == nil {
 			err = runPortfolio(db)
