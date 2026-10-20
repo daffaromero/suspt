@@ -74,9 +74,10 @@ async function send(method, path, body) {
   return text ? JSON.parse(text) : {};
 }
 
+const sentence = (m) => String(m).charAt(0).toUpperCase() + String(m).slice(1); // server errors start lowercase
 function toast(msg, kind = 'ok', ms) {
   const el = $('#toast');
-  el.textContent = msg;
+  el.textContent = sentence(msg);
   el.className = `toast ${kind}`;
   el.hidden = false;
   clearTimeout(toast.t);
@@ -151,7 +152,7 @@ function waitingOrders(orders) {
 function checklist(st, hasTrades) {
   const steps = [
     [st.keys, 'Connect the free data sources', 'Prices come from Tiingo and company filings from the SEC. Both are free; setup takes two minutes.', btn('go', 'Open settings', 'data-to="settings"', 'primary')],
-    [st.watching > 0, 'Choose stocks to follow', 'Start with the 215 stocks in SPUS, the S&amp;P 500 Shariah fund, or add your own.', btn('sync-spus', 'Add all SPUS stocks', '', 'primary') + ' ' + btn('go', 'Pick my own', 'data-to="watchlist"')],
+    [st.watching > 0, 'Choose stocks to follow', 'Start with the stocks in SPUS, the S&amp;P 500 Shariah fund, or add your own.', btn('sync-spus', 'Add all SPUS stocks', '', 'primary') + ' ' + btn('go', 'Pick my own', 'data-to="watchlist"')],
     [hasTrades, 'Make your first paper trade', 'Open a stock in the watchlist and press Buy. Every trade asks why you are making it, so later you can see which reasons worked. No real money moves.', btn('go', 'Go to watchlist', 'data-to="watchlist"')],
   ];
   if (steps.every((s) => s[0])) return '';
@@ -608,7 +609,7 @@ async function viewSettings(main) {
     <p class="fine">Changing a setting re-runs the whole simulation from the start date with the new values.</p>
     ${label('03', 'stocks and data')}
     <div class="panel narrow">
-      <p>${btn('sync-spus', 'Add all SPUS stocks to the watchlist')} <span class="fine">the 215 stocks in the S&amp;P 500 Shariah fund</span></p>
+      <p>${btn('sync-spus', 'Add all SPUS stocks to the watchlist')} <span class="fine">every stock in the S&amp;P 500 Shariah fund</span></p>
       <p>${btn('refresh', 'Fetch new data now')} <span class="fine">${st.job.running ? 'a refresh is running' : `latest data: ${esc(st.asOf || 'none yet')}`}</span></p>
     </div>`;
 }
@@ -830,7 +831,7 @@ async function runCommand(line) {
         await send('POST', '/api/watchlist/star', { tickers: w.slice(1), on: c === 'STAR' });
         closeCmd(); toast(`${w.slice(1).join(', ')} ${c === 'STAR' ? 'on' : 'off'} your shortlist`); route();
       }
-    } catch (e) { out(e.message); }
+    } catch (e) { out(sentence(e.message)); }
     return;
   }
   closeCmd();
@@ -996,10 +997,10 @@ async function openTrade(ticker, side, pre = {}) {
     try {
       const r = await send('POST', '/api/orders', body);
       dlg.close();
-      toast(`Order #${r.id} placed: ${side} ${d.ticker}. It's listed as waiting until it fills at a market open after ${r.placedOn}.`, 'ok', 10000);
+      toast(`Order #${r.id} placed: ${side} ${d.ticker}. It waits for a market open after ${shortDate(r.placedOn)} and fills there.`, 'ok', 10000);
       route();
     } catch (err) {
-      $('#trade-err').textContent = err.message;
+      $('#trade-err').textContent = sentence(err.message);
       place.disabled = false;
       place.textContent = 'Place paper order';
     }
@@ -1083,7 +1084,7 @@ document.addEventListener('submit', (e) => {
     case 'add-level': run(() => send('POST', '/api/levels', { ticker: f.dataset.ticker, name: v('name'), price: parseFloat(v('price')) }), 'Level saved'); break;
     case 'add-rule': run(() => send('POST', '/api/rules', { name: v('name'), ticker: v('ticker'), action: v('action'), thesis: v('thesis'), condition: v('condition') }), (r) => `Rule saved (version ${r.version})`); break;
     case 'review': break; // a verdict needs an explicit button press, not Enter
-    case 'setting': run(() => send('POST', '/api/settings', { key: f.dataset.key, value: v('value') }), 'Saved; the simulation was re-run'); break;
+    case 'setting': run(() => send('POST', '/api/settings', { key: f.dataset.key, value: v('value') }), 'Saved. The simulation re-ran with the new value.'); break;
     case 'practice-custom': setMode('practice'); run(async () => { state.practice = await send('POST', '/api/practice/start', { scenario: 'custom', date: v('date') }); drawPracticeBar(); location.hash = 'watchlist'; }, 'Practice started. Pick a stock and press Buy.'); break;
     case 'setup': run(() => send('POST', '/api/setup', { tiingoKey: v('tiingoKey'), name: v('name'), email: v('email') }), 'Connected. Fetching data in the background.').then(kick); break;
   }

@@ -62,7 +62,7 @@ func parseOperand(tok string) (operand, error) {
 	case strings.HasPrefix(tok, "sma"):
 		n, err := strconv.Atoi(tok[3:])
 		if err != nil || n < 2 || n > 400 {
-			return operand{}, fmt.Errorf("bad moving average %q (sma2 to sma400)", tok)
+			return operand{}, fmt.Errorf("%q isn't a moving average rules support; use sma2 up to sma400", tok)
 		}
 		return operand{kind: "sma", n: n}, nil
 	case strings.HasPrefix(tok, "level:") && len(tok) > 6:
@@ -70,7 +70,7 @@ func parseOperand(tok string) (operand, error) {
 	}
 	v, err := strconv.ParseFloat(tok, 64)
 	if err != nil || math.IsNaN(v) || math.IsInf(v, 0) {
-		return operand{}, fmt.Errorf("unknown term %q (use open, high, low, close, chg, smaN, level:NAME or a number)", tok)
+		return operand{}, fmt.Errorf("rules don't know %q; use open, high, low, close, chg, smaN, level:NAME or a number", tok)
 	}
 	return operand{kind: "num", v: v}, nil
 }
@@ -80,14 +80,14 @@ func parseCondition(cond string) ([]clause, error) {
 	var out []clause
 	for len(toks) > 0 {
 		if len(toks) < 3 {
-			return nil, fmt.Errorf("incomplete clause %q (want: TERM OP TERM)", strings.Join(toks, " "))
+			return nil, fmt.Errorf("%q is incomplete: a condition compares two things, like close > sma200", strings.Join(toks, " "))
 		}
 		l, err := parseOperand(toks[0])
 		if err != nil {
 			return nil, err
 		}
 		if !slices.Contains(ruleOps, toks[1]) {
-			return nil, fmt.Errorf("unknown operator %q (use %s)", toks[1], strings.Join(ruleOps, ", "))
+			return nil, fmt.Errorf("%q isn't a comparison rules know; use %s", toks[1], strings.Join(ruleOps, ", "))
 		}
 		r, err := parseOperand(toks[2])
 		if err != nil {
@@ -103,7 +103,7 @@ func parseCondition(cond string) ([]clause, error) {
 		}
 	}
 	if len(out) == 0 {
-		return nil, errors.New("empty condition")
+		return nil, errors.New("write a condition, like close > sma200")
 	}
 	return out, nil
 }
@@ -243,7 +243,7 @@ func addRule(db *sql.DB, r *rule) error {
 	r.Thesis, r.Condition = strings.ToLower(strings.TrimSpace(r.Thesis)), strings.Join(strings.Fields(r.Condition), " ")
 	switch {
 	case !ruleNameRe.MatchString(r.Name):
-		return errors.New("rule name: lowercase letters, digits and dashes, e.g. golden-cross")
+		return errors.New("rule names use lowercase letters, digits and dashes, like golden-cross")
 	case r.Ticker != "*" && !tickerRe.MatchString(r.Ticker):
 		return fmt.Errorf("%q is not a ticker (use * for the whole watchlist)", r.Ticker)
 	case r.Action != "BUY" && r.Action != "WATCH":
@@ -278,7 +278,7 @@ func retireRule(db *sql.DB, name string) error {
 		return err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		return fmt.Errorf("no active rule %q", name)
+		return fmt.Errorf("there's no active rule called %q", name)
 	}
 	return nil
 }
@@ -445,7 +445,7 @@ func setLevel(db *sql.DB, ticker, name string, price float64) error {
 	case !tickerRe.MatchString(ticker):
 		return fmt.Errorf("%q is not a ticker", ticker)
 	case !levelNameRe.MatchString(name):
-		return errors.New("level name: letters, digits, - or _, e.g. support")
+		return errors.New("level names use letters, digits, - or _, like support")
 	case !(price > 0) || math.IsInf(price, 0):
 		return errors.New("price must be a positive number")
 	}

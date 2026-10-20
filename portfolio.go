@@ -93,7 +93,7 @@ func setSetting(db *sql.DB, key, val string) error {
 	switch key {
 	case "start_date":
 		if _, err := time.Parse(time.DateOnly, val); err != nil {
-			return fmt.Errorf("start_date must be YYYY-MM-DD")
+			return fmt.Errorf("pick a start date")
 		}
 	case "compliance_sell":
 		if val != "sell" && val != "alert" {
@@ -115,10 +115,10 @@ func setSetting(db *sql.DB, key, val string) error {
 		}
 	default:
 		if v, err := strconv.ParseFloat(val, 64); err != nil || v < 0 || math.IsNaN(v) || math.IsInf(v, 0) {
-			return fmt.Errorf("%s must be a number >= 0", key)
+			return fmt.Errorf("%q isn't a number; use 0 or more", val)
 		}
 		if v, _ := strconv.ParseFloat(val, 64); key == "deposit_day" && (v < 1 || v > 31 || v != math.Trunc(v)) {
-			return fmt.Errorf("deposit_day must be 1-31")
+			return fmt.Errorf("the deposit day has to be a whole number from 1 to 31")
 		}
 	}
 	if _, err := db.Exec(`INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)`, key, val); err != nil {
@@ -834,9 +834,14 @@ func placeOrder(db *sql.DB, o *order) error {
 	if side == "buy" && !slices.Contains(set.etfs(), o.Ticker) {
 		if status, note := latestStatus(db, o.Ticker, true); status != "COMPLIANT" {
 			if cur, _ := latestStatus(db, o.Ticker, false); cur == "COMPLIANT" {
-				note += " (the current month shows COMPLIANT; it takes effect when the month's screen is final)"
+				note += ". This month looks compliant so far; you can buy once its screen is final"
 			}
-			return fmt.Errorf("%s is %s as of the last monthly screen, buy refused %s", o.Ticker, status, note)
+			why := map[string]string{"NON_COMPLIANT": "found it non-compliant", "REVIEW": "needs your verdict on the business", "NO_DATA": "is missing data", "NO_SCREEN": "hasn't run for it"}[status]
+			msg := fmt.Sprintf("%s can't be bought: the last monthly screen %s.", o.Ticker, orDefault(why, "says "+strings.ToLower(status)))
+			if note = strings.TrimPrefix(note, ". "); note != "" {
+				msg += " " + strings.ToUpper(note[:1]) + note[1:] + "."
+			}
+			return errors.New(msg)
 		}
 	}
 	o.PlacedOn = today(db)
@@ -866,7 +871,7 @@ func cancelOrder(db *sql.DB, id string) error {
 		return err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		return fmt.Errorf("order %s is not open", id)
+		return fmt.Errorf("order #%s has already filled, expired or been cancelled", id)
 	}
 	return replay(db)
 }
