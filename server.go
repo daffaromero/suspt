@@ -56,6 +56,9 @@ type screenJSON struct {
 	DJStatus string   `json:"djStatus"`
 	DJDebt   *float64 `json:"djDebt"`
 	DJCash   *float64 `json:"djCash"`
+	AAStatus string   `json:"aaStatus"`
+	AADebt   *float64 `json:"aaDebt"`
+	AACash   *float64 `json:"aaCash"`
 }
 
 type hitJSON struct {
@@ -91,8 +94,8 @@ func scanScreens(rs *sql.Rows, withTicker bool) ([]screenJSON, error) {
 	out := []screenJSON{}
 	for rs.Next() {
 		var s screenJSON
-		var d, c, n, p, djd, djc sql.NullFloat64
-		dest := []any{&s.AsOf, &s.Status, &s.Business, &d, &c, &n, &p, &s.Note, &s.DJStatus, &djd, &djc}
+		var d, c, n, p, djd, djc, aad, aac sql.NullFloat64
+		dest := []any{&s.AsOf, &s.Status, &s.Business, &d, &c, &n, &p, &s.Note, &s.DJStatus, &djd, &djc, &s.AAStatus, &aad, &aac}
 		if withTicker {
 			dest = append([]any{&s.Ticker, &s.Name}, dest...)
 		}
@@ -100,6 +103,7 @@ func scanScreens(rs *sql.Rows, withTicker bool) ([]screenJSON, error) {
 			return nil, err
 		}
 		s.Debt, s.Cash, s.NPI, s.Purif, s.DJDebt, s.DJCash = ptr(d), ptr(c), ptr(n), ptr(p), ptr(djd), ptr(djc)
+		s.AADebt, s.AACash = ptr(aad), ptr(aac)
 		out = append(out, s)
 	}
 	return out, rs.Err()
@@ -107,7 +111,7 @@ func scanScreens(rs *sql.Rows, withTicker bool) ([]screenJSON, error) {
 
 func latestScreens(db *sql.DB) ([]screenJSON, error) {
 	rs, err := db.Query(`SELECT s.ticker, COALESCE(c.name, ''), s.as_of, s.status, s.business, s.debt_ratio, s.cash_ratio, s.npi_ratio, s.purification_ratio, COALESCE(s.note, ''),
-		COALESCE(s.dj_status, ''), s.dj_debt_ratio, s.dj_cash_ratio
+		COALESCE(s.dj_status, ''), s.dj_debt_ratio, s.dj_cash_ratio, COALESCE(s.aa_status, ''), s.aa_debt_ratio, s.aa_cash_ratio
 		FROM screens s JOIN (SELECT ticker, MAX(as_of) AS as_of FROM screens GROUP BY ticker) m USING (ticker, as_of)
 		LEFT JOIN companies c USING (ticker) ORDER BY s.ticker`)
 	if err != nil {
@@ -167,7 +171,8 @@ func loadTickerDetail(db *sql.DB, t string) (tickerDetail, error) {
 	rs.Close()
 
 	rs, err = db.Query(`SELECT as_of, status, business, debt_ratio, cash_ratio, npi_ratio, purification_ratio, COALESCE(note, ''),
-		COALESCE(dj_status, ''), dj_debt_ratio, dj_cash_ratio FROM screens WHERE ticker = ? ORDER BY as_of`, t)
+		COALESCE(dj_status, ''), dj_debt_ratio, dj_cash_ratio, COALESCE(aa_status, ''), aa_debt_ratio, aa_cash_ratio
+		FROM screens WHERE ticker = ? ORDER BY as_of`, t)
 	if err != nil {
 		return d, err
 	}

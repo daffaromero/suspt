@@ -182,3 +182,34 @@ func TestRuleChangeUsesBuffer(t *testing.T) {
 		t.Errorf("compliance over the rule change = %v, want [true true true true false]", got)
 	}
 }
+
+func TestAAOIFIReference(t *testing.T) {
+	// Same history as TestDowJonesWindow: today's value is 10 x 100 = 1000, so $250 of
+	// debt is 25% for AAOIFI (no averaging), against 18.75% for S&P's 36-month average.
+	var months []bar
+	for m := range 36 {
+		px := 10.0
+		if m < 12 {
+			px = 20
+		}
+		months = append(months, bar{Date: fmt.Sprintf("%d-%02d-28", 2023+m/12, m%12+1), Close: px, Split: 1})
+	}
+	facts := []sfact{
+		{Concept: "EntityCommonStockSharesOutstanding", End: "2022-12-31", Filed: "2023-01-15", Val: 100},
+		{Concept: "Assets", End: "2025-09-30", Filed: "2025-10-30", Val: 1},
+		{Concept: "LongTermDebt", End: "2025-09-30", Filed: "2025-10-30", Val: 250},
+	}
+	r, _ := evaluate(facts, months, nil, len(months)-1, 0)
+	if !near(r.AADebt, 0.25) {
+		t.Fatalf("AAOIFI debt = %v, want 0.25 of today's value", r.AADebt)
+	}
+	// "Not exceed 30%": exactly 30% passes, anything above fails, with no buffer.
+	for debt, want := range map[float64]string{0.30: "COMPLIANT", 0.3001: "NON_COMPLIANT"} {
+		if got := aaoifiStatus("ok", ratios{AADebt: debt, AACash: 0, NPI: 0.01}); got != want {
+			t.Errorf("AAOIFI at debt %v = %s, want %s", debt, got, want)
+		}
+	}
+	if got := aaoifiStatus("ok", ratios{AADebt: 0.1, AACash: 0.1, NPI: 0.051}); got != "NON_COMPLIANT" {
+		t.Errorf("impure income 5.1%% = %s, want NON_COMPLIANT", got)
+	}
+}

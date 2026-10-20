@@ -170,7 +170,8 @@ func openDB(path string) (*sql.DB, error) {
 		return nil, err
 	}
 	// Migrations for databases created before these columns existed; screens is derived data.
-	for _, col := range []string{"provisional INTEGER NOT NULL DEFAULT 0", "dj_status TEXT", "dj_debt_ratio REAL", "dj_cash_ratio REAL"} {
+	for _, col := range []string{"provisional INTEGER NOT NULL DEFAULT 0", "dj_status TEXT", "dj_debt_ratio REAL", "dj_cash_ratio REAL",
+		"aa_status TEXT", "aa_debt_ratio REAL", "aa_cash_ratio REAL"} {
 		if _, err := db.Exec(`ALTER TABLE screens ADD COLUMN ` + col); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			db.Close()
 			return nil, err

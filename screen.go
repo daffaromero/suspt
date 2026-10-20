@@ -30,6 +30,14 @@ const (
 	// limits, buffer and income test, with market cap averaged over 24 months. Shown for
 	// reference; S&P decides what can be bought.
 	djAvgMonths = 24
+
+	// AAOIFI Shari'ah Standard No. 21, clauses 3/4/2 to 3/4/5 as quoted by secondary
+	// sources (AAOIFI's own text is members-only, so this is unverified): interest-bearing
+	// debt and interest-taking deposits each "not exceed 30%" of market capitalisation
+	// (current, no averaging), prohibited income not over 5% of total income, from the
+	// latest financial statements. No buffer. Shown for comparison only.
+	aaMaxRatio = 0.30
+	aaMaxNPI   = 0.05
 )
 
 // The methodology does not define these line items in XBRL terms. Mapping to
@@ -255,6 +263,7 @@ func splitFactor(splits []bar, after, upto string) float64 {
 type ratios struct {
 	Debt, Cash, NPI, Purif float64 // NaN when unknown
 	DJDebt, DJCash         float64 // against the 24-month average, for the Dow Jones reference
+	AADebt, AACash         float64 // against the current market cap, for the AAOIFI reference
 	Notes                  []string
 }
 
@@ -263,7 +272,7 @@ type ratios struct {
 func evaluate(all []sfact, months, splits []bar, i int, npFrac float64) (ratios, bool) {
 	d := months[i].Date
 	b := book(all).known(d)
-	r := ratios{Debt: math.NaN(), Cash: math.NaN(), NPI: math.NaN(), Purif: math.NaN(), DJDebt: math.NaN(), DJCash: math.NaN()}
+	r := ratios{Debt: math.NaN(), Cash: math.NaN(), NPI: math.NaN(), Purif: math.NaN(), DJDebt: math.NaN(), DJCash: math.NaN(), AADebt: math.NaN(), AACash: math.NaN()}
 
 	// Monthly market caps, newest last; S&P averages 36 of them, Dow Jones 24.
 	var caps []float64
@@ -301,6 +310,7 @@ func evaluate(all []sfact, months, splits []bar, i int, npFrac float64) (ratios,
 	}
 	r.Debt, r.Cash = debt/mve, cash/mve
 	r.DJDebt, r.DJCash = debt/djMVE, cash/djMVE
+	r.AADebt, r.AACash = debt/caps[n-1], cash/caps[n-1]
 
 	fy := b.latestEnd(revenueConcepts, true)
 	if fy == "" {
@@ -380,6 +390,7 @@ type screenRow struct {
 	Streak      int
 	Provisional bool // current month: shown, but never gates fills until the month is final
 	DJStatus    string
+	AAStatus    string
 }
 
 func screenTicker(db *sql.DB, ticker string) ([]screenRow, error) {
@@ -484,6 +495,7 @@ func screenTicker(db *sql.DB, ticker string) ([]screenRow, error) {
 			worst, limit = worstRatio(months[i].Date, r.DJDebt, r.DJCash)
 			dj = nextState(dj, worst, limit)
 			row.DJStatus = status(business, r, dj)
+			row.AAStatus = aaoifiStatus(business, r)
 			if current && member != "" && business != "excluded" && row.Status == "NON_COMPLIANT" {
 				row.Notes = append(row.Notes, "S&P's own fund (SPUS) holds it: its data puts the ratios slightly lower than ours near the limit")
 			}
@@ -500,14 +512,25 @@ func screenTicker(db *sql.DB, ticker string) ([]screenRow, error) {
 		return nil, err
 	}
 	for _, r := range rows {
-		if _, err := tx.Exec(`INSERT INTO screens (ticker, as_of, status, business, debt_ratio, cash_ratio, npi_ratio, purification_ratio, streak, note, provisional, dj_status, dj_debt_ratio, dj_cash_ratio)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), ?, ?)`,
+		if _, err := tx.Exec(`INSERT INTO screens (ticker, as_of, status, business, debt_ratio, cash_ratio, npi_ratio, purification_ratio, streak, note, provisional, dj_status, dj_debt_ratio, dj_cash_ratio, aa_status, aa_debt_ratio, aa_cash_ratio)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), ?, ?, NULLIF(?, ''), ?, ?)`,
 			ticker, r.AsOf, r.Status, r.Business, nullable(r.Debt), nullable(r.Cash), nullable(r.NPI), nullable(r.Purif), r.Streak, strings.Join(r.Notes, "; "), r.Provisional,
-			r.DJStatus, nullable(r.DJDebt), nullable(r.DJCash)); err != nil {
+			r.DJStatus, nullable(r.DJDebt), nullable(r.DJCash), r.AAStatus, nullable(r.AADebt), nullable(r.AACash)); err != nil {
 			return nil, err
 		}
 	}
 	return rows, tx.Commit()
+}
+
+// aaoifiStatus applies the quoted SS21 limits with no buffer: each evaluation stands alone.
+func aaoifiStatus(business string, r ratios) string {
+	switch {
+	case business == "excluded", r.NPI > aaMaxNPI, r.AADebt > aaMaxRatio, r.AACash > aaMaxRatio:
+		return "NON_COMPLIANT"
+	case business == "review", math.IsNaN(r.NPI):
+		return "REVIEW"
+	}
+	return "COMPLIANT"
 }
 
 func status(business string, r ratios, st screenState) string {
@@ -555,14 +578,14 @@ func screenReport(db *sql.DB, tickers []string, brief bool) error {
 		rs.Close()
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "TICKER\tSTATUS\tDOW JONES\tDEBT\tCASH\tNPI\tPURIFY\tBUSINESS\tAS OF\tNOTE")
+	fmt.Fprintln(w, "TICKER\tSTATUS\tDOW JONES\tAAOIFI\tDEBT\tCASH\tNPI\tPURIFY\tBUSINESS\tAS OF\tNOTE")
 	counts := map[string]int{}
 	for _, t := range tickers {
 		t = strings.ToUpper(t)
 		rows, err := screenTicker(db, t)
 		if err != nil {
 			counts["ERROR"]++
-			fmt.Fprintf(w, "%s\tERROR\t\t\t\t\t\t\t\t%v\n", t, err)
+			fmt.Fprintf(w, "%s\tERROR\t\t\t\t\t\t\t\t\t%v\n", t, err)
 			continue
 		}
 		r := rows[len(rows)-1]
@@ -570,7 +593,7 @@ func screenReport(db *sql.DB, tickers []string, brief bool) error {
 		if brief && r.Status != "REVIEW" && r.Status != "NO_DATA" {
 			continue
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", t, r.Status, orDefault(r.DJStatus, "-"), pct(r.Debt), pct(r.Cash), pct(r.NPI), pct(r.Purif), r.Business, r.AsOf, strings.Join(r.Notes, "; "))
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", t, r.Status, orDefault(r.DJStatus, "-"), orDefault(r.AAStatus, "-"), pct(r.Debt), pct(r.Cash), pct(r.NPI), pct(r.Purif), r.Business, r.AsOf, strings.Join(r.Notes, "; "))
 	}
 	if brief {
 		fmt.Fprintf(w, "\nscreened %d: %d compliant, %d non-compliant, %d review, %d no data, %d errors (full table: suspt screen)\n",

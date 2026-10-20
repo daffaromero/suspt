@@ -17,7 +17,7 @@ Keep the small window that opens: closing it stops the app. While it's open, new
 
 | Topic | Decision |
 |---|---|
-| Sharia standard | S&P Shariah governs buy/sell. Dow Jones Islamic is shown for comparison. AAOIFI is pending its source document (members-only). |
+| Sharia standard | S&P Shariah governs buy/sell. Dow Jones Islamic and AAOIFI are shown for comparison. |
 | Capital | $300 starting deposit plus $50 per month (`suspt config` to change). The benchmark receives the same deposits on the same dates. |
 | Benchmark | SPUS (tracks S&P 500 Shariah, same methodology as the governing screen) |
 | Prices | Tiingo free tier (50 req/hour, 1000/day, 500 symbols/month, personal use only) |
@@ -86,7 +86,9 @@ Source: S&P Shariah Indices Methodology, October 2026 edition (accounting screen
 
 Dow Jones Islamic (September 2026 edition, shown for comparison only): the same limits, buffer and income test, with the market value averaged over 24 months instead of 36.
 
-Rule history: both methodologies changed on 2026-09-18. Before that, the only ratio test was debt under 33% (per both change logs), and that is what older evaluations use, so the 2-point buffer carries stocks across the change exactly as the indices do.
+AAOIFI Shari'ah Standard No. 21 (shown for comparison only): interest-bearing debt and interest-taking deposits each not over 30% of today's market value (no averaging), prohibited income not over 5% of total income, from the latest financial statements, with no grace zone. AAOIFI's text is members-only, so clauses 3/4/2 to 3/4/5 come from secondary quotes ([halal.ninja](https://halal.ninja/what-is-aaoifi)) and are unverified. Deposits are approximated by cash plus interest-bearing securities.
+
+Rule history: both S&P and Dow Jones changed on 2026-09-18. Before that, the only ratio test was debt under 33% (per both change logs), and that is what older evaluations use, so the 2-point buffer carries stocks across the change exactly as the indices do.
 
 Our choices (not in the methodology):
 
