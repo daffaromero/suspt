@@ -484,7 +484,7 @@ func watchlistRows(db *sql.DB) ([]watchRow, error) {
 			return nil, err
 		}
 		for n, p := range lv {
-			d := math.NaN()
+			d := 0.0 // JSON has no NaN
 			if r.Close > 0 {
 				d = (p - r.Close) / r.Close
 			}

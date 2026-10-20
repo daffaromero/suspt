@@ -122,6 +122,7 @@ CREATE TABLE IF NOT EXISTS equity (
 
 const usage = `usage:
   suspt update                                    daily routine: ingest watchlist + holdings + benchmark, screen, replay, signals
+  suspt serve [ADDR]                              dashboard (default 127.0.0.1:8484)
 
   suspt watch [TICKER...]                         show the watchlist, or add tickers
   suspt unwatch TICKER...
@@ -221,6 +222,8 @@ func main() {
 		err = runSignals(db)
 	case "update":
 		err = runUpdate(db)
+	case "serve":
+		err = runServe(db, args)
 	case "run":
 		if err = replay(db); err == nil {
 			err = runPortfolio(db)

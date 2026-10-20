@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>suspt</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230e1450'/%3E%3Cpath d='M3 11l3-4 3 2 4-5' stroke='%23f4d33a' stroke-width='1.6' fill='none'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="#portfolio" aria-label="suspt home">
+    <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M2 11.5l3.5-4.5 3 2.2L14 3" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <b>suspt</b>
+  </a>
+  <nav id="nav" aria-label="Views"></nav>
+  <span class="path" id="path">~/portfolio</span>
+  <span class="pill">paper · s&amp;p shariah</span>
+</header>
+
+<main id="view" tabindex="-1"><p class="loading">loading…</p></main>
+
+<footer class="keys">
+  <span id="hints"></span>
+  <span class="clock" id="clock" aria-live="polite"></span>
+</footer>
+
+<div id="help" class="help" hidden role="dialog" aria-modal="true" aria-labelledby="help-title">
+  <div class="help-card">
+    <h2 id="help-title"><span class="num">??</span> keys &amp; commands</h2>
+    <div class="cols">
+      <dl>
+        <dt>1 to 6</dt><dd>switch view</dd>
+        <dt>j / k</dt><dd>move through the list</dd>
+        <dt>/</dt><dd>filter</dd>
+        <dt>r</dt><dd>reload data</dd>
+        <dt>?</dt><dd>this help</dd>
+        <dt>esc</dt><dd>close / clear</dd>
+      </dl>
+      <pre>suspt update            # daily: fetch, screen, replay
+suspt watch NVDA AAPL
+suspt level NVDA support 120
+suspt rule add trend '*' WATCH trend \
+  "close > sma50 and sma50 > sma200"
+suspt buy NVDA -usd 50 -reason "..." -thesis ai
+suspt sell NVDA all -reason "..." -thesis ai
+suspt config fee_flat 1</pre>
+    </div>
+    <p class="fine">The dashboard is read-only; every change goes through the CLI so each trade keeps its reason and thesis.
+      Simulation only: no brokerage, no real orders. Market hours shown ignore exchange holidays.
+      Charts: TradingView Lightweight Charts™, Copyright (c) 2025 TradingView, Inc. <a href="https://www.tradingview.com/" rel="noreferrer">tradingview.com</a></p>
+  </div>
+</div>
+
+<script src="vendor/lightweight-charts.standalone.production.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
