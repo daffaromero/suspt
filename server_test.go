@@ -6,8 +6,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestServerSmoke(t *testing.T) {
@@ -28,7 +31,7 @@ func TestServerSmoke(t *testing.T) {
 	if err := replay(db); err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(newServer(db))
+	srv := httptest.NewServer(newServer(&app{db: db, dbPath: filepath.Join(t.TempDir(), "x.db")}))
 	defer srv.Close()
 
 	for _, p := range []string{"/api/summary", "/api/watchlist", "/api/journal", "/api/signals", "/api/orders", "/api/screens", "/api/rules", "/api/ticker/AAA"} {
@@ -61,5 +64,85 @@ func TestServerSmoke(t *testing.T) {
 	res.Body.Close()
 	if len(s.Positions) != 1 || s.Positions[0].Ticker != "AAA" || s.Contributions != 300 {
 		t.Errorf("summary = %+v", s)
+	}
+}
+
+func TestAppWritesAndGuard(t *testing.T) {
+	db := testDB(t)
+	for i := range 5 {
+		db.Exec(`INSERT INTO prices (ticker, date, open, high, low, close, volume) VALUES ('SPUS', ?, 10, 10, 10, 10, 1)`, fmt.Sprintf("2026-09-%02d", i+1))
+	}
+	srv := httptest.NewServer(newServer(&app{db: db, dbPath: filepath.Join(t.TempDir(), "x.db")}))
+	defer srv.Close()
+	send := func(method, path, body string, hdr map[string]string) (int, string) {
+		req, _ := http.NewRequest(method, srv.URL+path, strings.NewReader(body))
+		for k, v := range hdr {
+			req.Header.Set(k, v)
+		}
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		b, _ := io.ReadAll(res.Body)
+		return res.StatusCode, string(b)
+	}
+	ours := map[string]string{"X-Suspt": "1", "Content-Type": "application/json"}
+
+	if code, _ := send("POST", "/api/watchlist", `{"tickers":["NVDA"]}`, nil); code != 403 {
+		t.Errorf("write without X-Suspt: %d, want 403", code)
+	}
+	if code, _ := send("POST", "/api/watchlist", `{"tickers":["NVDA"]}`, map[string]string{"X-Suspt": "1", "Origin": "https://evil.example"}); code != 403 {
+		t.Errorf("cross-origin write: %d, want 403", code)
+	}
+	// A DNS-rebinding page reaches this server under its own host name.
+	req, _ := http.NewRequest("GET", srv.URL+"/api/summary", nil)
+	req.Host = "evil.example"
+	if res, err := http.DefaultClient.Do(req); err != nil || res.StatusCode != http.StatusMisdirectedRequest {
+		t.Errorf("foreign Host: %v %v, want 421", res.StatusCode, err)
+	} else {
+		res.Body.Close()
+	}
+	if code, body := send("POST", "/api/watchlist", `{"tickers":["nvda"]}`, ours); code != 200 || !strings.Contains(body, `"added":1`) {
+		t.Errorf("add watch: %d %s", code, body)
+	}
+	if code, body := send("POST", "/api/orders", `{"ticker":"NVDA","side":"buy","usd":50,"reason":"","thesis":"x"}`, ours); code != 400 || !strings.Contains(body, "reason") {
+		t.Errorf("order without reason: %d %s", code, body)
+	}
+	if code, body := send("POST", "/api/rules", `{"name":"t","ticker":"*","action":"WATCH","thesis":"x","condition":"close >"}`, ours); code != 400 || !strings.Contains(body, "incomplete") {
+		t.Errorf("bad rule: %d %s", code, body)
+	}
+	if code, body := send("POST", "/api/setup", `{"tiingoKey":"short","name":"A","email":"a@b.co"}`, ours); code != 400 || !strings.Contains(body, "Tiingo") {
+		t.Errorf("bad key: %d %s", code, body)
+	}
+	if code, _ := send("POST", "/api/settings", `{"key":"monthly_deposit","value":"75"}`, ours); code != 200 {
+		t.Errorf("setting: %d", code)
+	}
+}
+
+func TestWriteEnvAndSession(t *testing.T) {
+	p := filepath.Join(t.TempDir(), ".env")
+	os.WriteFile(p, []byte("# keep me\nTIINGO_API_KEY=old\nSUSPT_DB=x.db\n"), 0o600)
+	if err := writeEnv(p, map[string]string{"TIINGO_API_KEY": "new", "SEC_USER_AGENT": `"A a@b.co"`}); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(p)
+	if got := string(b); got != "# keep me\nSUSPT_DB=x.db\nSEC_USER_AGENT=\"A a@b.co\"\nTIINGO_API_KEY=new\n" {
+		t.Errorf(".env = %q", got)
+	}
+	if fi, _ := os.Stat(p); fi.Mode().Perm() != 0o600 {
+		t.Errorf(".env mode %v, want 0600", fi.Mode().Perm())
+	}
+	ny, _ := time.LoadLocation("America/New_York")
+	for at, want := range map[string]string{
+		"2026-10-20 15:00": "2026-10-19", // Tuesday before the close: Monday
+		"2026-10-20 17:00": "2026-10-20", // after the close: today
+		"2026-10-19 09:00": "2026-10-16", // Monday morning: Friday
+		"2026-10-18 12:00": "2026-10-16", // Sunday: Friday
+	} {
+		tm, _ := time.ParseInLocation("2006-01-02 15:04", at, ny)
+		if got := lastClosedSession(tm); got != want {
+			t.Errorf("lastClosedSession(%s) = %s, want %s", at, got, want)
+		}
 	}
 }

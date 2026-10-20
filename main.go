@@ -126,6 +126,7 @@ CREATE TABLE IF NOT EXISTS equity (
 `
 
 const usage = `usage:
+  suspt                                           open the app in your browser (same as double-clicking Suspt.command)
   suspt update                                    daily routine: ingest watchlist + holdings + benchmark, screen, replay, signals
   suspt serve [ADDR]                              dashboard (default 127.0.0.1:8484)
 
@@ -176,12 +177,14 @@ func openDB(path string) (*sql.DB, error) {
 	return db, nil
 }
 
-func mustEnv(name string) string {
-	v := os.Getenv(name)
-	if v == "" {
-		log.Fatalf("%s is not set: add it to .env in this folder (see .env.example)", name)
+var errNoKeys = errors.New("API keys missing: open Settings in the app (or add TIINGO_API_KEY and SEC_USER_AGENT to .env)")
+
+func apiKeys() (tiingo, secUA string, err error) {
+	tiingo, secUA = os.Getenv("TIINGO_API_KEY"), os.Getenv("SEC_USER_AGENT")
+	if tiingo == "" || secUA == "" {
+		return "", "", errNoKeys
 	}
-	return v
+	return tiingo, secUA, nil
 }
 
 // lockFetches lets only one ingest/update run at a time: two would split the hourly
@@ -224,9 +227,6 @@ func loadDotEnv(path string) {
 func main() {
 	log.SetFlags(0)
 	loadDotEnv(".env")
-	if len(os.Args) < 2 {
-		log.Fatal(usage)
-	}
 	dbPath := os.Getenv("SUSPT_DB")
 	if dbPath == "" {
 		dbPath = "data/suspt.db"
@@ -237,6 +237,9 @@ func main() {
 	}
 	defer db.Close()
 
+	if len(os.Args) < 2 { // plain `suspt` (or the double-click launcher) opens the app
+		os.Args = append(os.Args, "open")
+	}
 	args := os.Args[2:]
 	if os.Args[1] == "ingest" || os.Args[1] == "update" {
 		unlock, err := lockFetches(dbPath)
@@ -284,7 +287,11 @@ func main() {
 	case "sync-spus":
 		err = runSyncSPUS(db)
 	case "serve":
-		err = runServe(db, args)
+		err = runServe(db, dbPath, args, false)
+	case "open":
+		err = runServe(db, dbPath, args, true)
+	case "help", "-h", "--help":
+		fmt.Println(usage)
 	case "run":
 		if err = replay(db); err == nil {
 			err = runPortfolio(db)
@@ -302,7 +309,15 @@ func runIngest(db *sql.DB, tickers []string) error {
 	if len(tickers) == 0 {
 		return errors.New(usage)
 	}
-	tiingoKey, secUA := mustEnv("TIINGO_API_KEY"), mustEnv("SEC_USER_AGENT")
+	return ingestAll(db, tickers, nil)
+}
+
+// ingestAll fetches prices and filings for tickers, calling step (if set) before each.
+func ingestAll(db *sql.DB, tickers []string, step func(i, n int, ticker string)) error {
+	tiingoKey, secUA, err := apiKeys()
+	if err != nil {
+		return err
+	}
 	set, err := loadSettings(db)
 	if err != nil {
 		return err
@@ -318,7 +333,10 @@ func runIngest(db *sql.DB, tickers []string) error {
 	}
 	fresh := ""
 	failed := 0
-	for _, t := range tickers {
+	for i, t := range tickers {
+		if step != nil {
+			step(i, len(tickers), t)
+		}
 		var last sql.NullString
 		db.QueryRow(`SELECT MAX(date) FROM prices WHERE ticker = ?`, t).Scan(&last)
 		if t != bench && fresh != "" && last.String >= fresh {

@@ -15,39 +15,44 @@
   </a>
   <nav id="nav" aria-label="Views"></nav>
   <span class="path" id="path">~/portfolio</span>
-  <span class="pill">paper · s&amp;p shariah</span>
+  <button type="button" class="status" id="status" aria-live="polite"><span class="dot"></span>…</button>
+  <button type="button" class="pill" id="help-btn" aria-label="Help">? help</button>
 </header>
 
 <main id="view" tabindex="-1"><p class="loading">loading…</p></main>
 
 <footer class="keys">
   <span id="hints"></span>
-  <span class="clock" id="clock" aria-live="polite"></span>
+  <span class="clock" id="clock" aria-live="off"></span>
 </footer>
+
+<div id="toast" class="toast" role="status" hidden></div>
+<dialog id="trade" aria-label="Paper trade"></dialog>
 
 <div id="help" class="help" hidden role="dialog" aria-modal="true" aria-labelledby="help-title">
   <div class="help-card">
-    <h2 id="help-title"><span class="num">??</span> keys &amp; commands</h2>
+    <h2 id="help-title"><span class="num">??</span> what is this</h2>
+    <p>A practice account for sharia-compliant US stocks. You get pretend money ($300 to start, $50 a month by default), buy and sell real stocks at real prices, and see how your choices would have done. <b>No real money moves and nothing connects to a broker.</b></p>
+    <ul class="plain">
+      <li><b>Sharia screen.</b> Every company is checked with S&amp;P's Shariah rules: limits on debt, cash and income from interest or haram business. Only compliant stocks can be bought, and if one you hold stops being compliant it is sold for you.</li>
+      <li><b>Every trade asks why.</b> The journal later shows which reasons and themes made money, so you learn from your own decisions.</li>
+      <li><b>Benchmark.</b> Your result is compared with simply buying SPUS, a sharia fund, with the same deposits.</li>
+      <li><b>Data refreshes by itself</b> after each US market close while the app is open. The top-right button shows its progress.</li>
+    </ul>
     <div class="cols">
       <dl>
-        <dt>1 to 6</dt><dd>switch view</dd>
-        <dt>j / k</dt><dd>move through the list</dd>
+        <dt>1 to 7</dt><dd>switch page</dd>
+        <dt>j / k</dt><dd>next / previous stock</dd>
+        <dt>b</dt><dd>buy the selected stock</dd>
         <dt>/</dt><dd>filter</dd>
-        <dt>r</dt><dd>reload data</dd>
-        <dt>?</dt><dd>this help</dd>
-        <dt>esc</dt><dd>close / clear</dd>
+        <dt>r</dt><dd>reload the page data</dd>
+        <dt>esc</dt><dd>close</dd>
       </dl>
-      <pre>suspt update            # daily: fetch, screen, replay
-suspt watch NVDA AAPL
-suspt level NVDA support 120
-suspt rule add trend '*' WATCH trend \
-  "close > sma50 and sma50 > sma200"
+      <details><summary class="fine">for terminal users</summary><pre>suspt update     # fetch, screen, replay
 suspt buy NVDA -usd 50 -reason "..." -thesis ai
-suspt sell NVDA all -reason "..." -thesis ai
-suspt config fee_flat 1</pre>
+suspt help       # every command</pre></details>
     </div>
-    <p class="fine">The dashboard is read-only; every change goes through the CLI so each trade keeps its reason and thesis.
-      Simulation only: no brokerage, no real orders. Market hours shown ignore exchange holidays.
+    <p class="fine">For learning only, not investment or religious advice. Market hours shown ignore exchange holidays.
       Charts: TradingView Lightweight Charts™, Copyright (c) 2025 TradingView, Inc. <a href="https://www.tradingview.com/" rel="noreferrer">tradingview.com</a></p>
   </div>
 </div>

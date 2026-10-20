@@ -428,10 +428,10 @@ func screenTicker(db *sql.DB, ticker string) ([]screenRow, error) {
 		current := i == len(months)-1
 		business, np, note := sicVerdict(sic), 0.0, ""
 		if business == "review" {
-			note = fmt.Sprintf("SIC %s %s: record a verdict with `suspt review`", sic, sicDesc)
+			note = fmt.Sprintf("its industry code (%s, %s) can't tell whether the business is halal: record a verdict", sic, sicDesc)
 		}
 		if business == "ok" && spusAsOf != "" && member == "" && (spusAsOf <= months[i].Date || current) {
-			business, note = "review", "not held by SPUS, so S&P's own screen excludes it: check its business or `suspt review`"
+			business, note = "review", "not held by SPUS, so S&P's own review excludes it: check its business and record a verdict"
 		}
 		if verdict.Valid && (reviewedOn.String <= months[i].Date || current) {
 			business, np, note = verdict.String, npFrac, ""
@@ -548,12 +548,27 @@ func runReview(db *sql.DB, args []string) error {
 			pctVal, rest = v, rest[1:]
 		}
 	}
-	if pctVal < 0 || pctVal >= 100 {
-		return fmt.Errorf("non-permissible revenue must be a percent in [0, 100), got %v", pctVal)
+	return setReview(db, args[0], args[1], pctVal, strings.Join(rest, " "))
+}
+
+// setReview records a manual business-activity verdict; pctVal is the non-permissible
+// share of revenue in percent. It applies from today (see screenTicker).
+func setReview(db *sql.DB, ticker, verdict string, pctVal float64, note string) error {
+	ticker = strings.ToUpper(strings.TrimSpace(ticker))
+	switch {
+	case !tickerRe.MatchString(ticker):
+		return fmt.Errorf("%q is not a ticker", ticker)
+	case verdict != "ok" && verdict != "excluded":
+		return errors.New("verdict must be ok or excluded")
+	case !(pctVal >= 0 && pctVal < 100):
+		return fmt.Errorf("non-permissible revenue must be a percent from 0 to under 100, got %v", pctVal)
 	}
-	_, err := db.Exec(`INSERT OR REPLACE INTO business_reviews (ticker, verdict, nonpermissible_revenue, note, reviewed_on)
-		VALUES (?, ?, ?, ?, ?)`, strings.ToUpper(args[0]), args[1], pctVal/100, strings.Join(rest, " "), nyToday())
-	return err
+	if _, err := db.Exec(`INSERT OR REPLACE INTO business_reviews (ticker, verdict, nonpermissible_revenue, note, reviewed_on)
+		VALUES (?, ?, ?, ?, ?)`, ticker, verdict, pctVal/100, strings.TrimSpace(note), nyToday()); err != nil {
+		return err
+	}
+	screenTicker(db, ticker) // best effort: without prices or filings yet, the next refresh screens it
+	return nil
 }
 
 var spusHoldingsURL = "https://www.sp-funds.com/wp-content/uploads/data/TidalFG_Holdings_SPUS.csv"

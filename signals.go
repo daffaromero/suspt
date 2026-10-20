@@ -7,6 +7,7 @@ import (
 	"log"
 	"math"
 	"os"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -219,23 +220,36 @@ func loadRules(db *sql.DB, all bool) ([]rule, error) {
 // runRule adds a rule or a new version of it (the old version is retired, never edited).
 func runRule(db *sql.DB, args []string) error {
 	if len(args) == 2 && args[0] == "rm" {
-		res, err := db.Exec(`UPDATE rules SET retired_on = ? WHERE name = ? AND retired_on IS NULL`, nyToday(), args[1])
-		if err != nil {
-			return err
-		}
-		if n, _ := res.RowsAffected(); n == 0 {
-			return fmt.Errorf("no active rule %q", args[1])
-		}
-		return nil
+		return retireRule(db, args[1])
 	}
 	if len(args) != 6 || args[0] != "add" {
 		return errors.New(`usage: suspt rule add NAME TICKER|* BUY|WATCH THESIS "CONDITION"
        suspt rule rm NAME
 example: suspt rule add golden-cross '*' WATCH trend "sma50 crosses_above sma200"`)
 	}
-	r := rule{Name: args[1], Ticker: strings.ToUpper(args[2]), Action: strings.ToUpper(args[3]), Thesis: strings.ToLower(args[4]), Condition: strings.Join(strings.Fields(args[5]), " ")}
-	if r.Action != "BUY" && r.Action != "WATCH" {
+	r := rule{Name: args[1], Ticker: args[2], Action: args[3], Thesis: args[4], Condition: args[5]}
+	if err := addRule(db, &r); err != nil {
+		return err
+	}
+	fmt.Printf("rule %s v%d: %s %s when %s\n", r.Name, r.Version, r.Action, r.Ticker, r.Condition)
+	return nil
+}
+
+var ruleNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,39}$`)
+
+// addRule saves a rule, or a new version of it (the old version is retired, never edited).
+func addRule(db *sql.DB, r *rule) error {
+	r.Name, r.Ticker, r.Action = strings.ToLower(strings.TrimSpace(r.Name)), strings.ToUpper(strings.TrimSpace(r.Ticker)), strings.ToUpper(r.Action)
+	r.Thesis, r.Condition = strings.ToLower(strings.TrimSpace(r.Thesis)), strings.Join(strings.Fields(r.Condition), " ")
+	switch {
+	case !ruleNameRe.MatchString(r.Name):
+		return errors.New("rule name: lowercase letters, digits and dashes, e.g. golden-cross")
+	case r.Ticker != "*" && !tickerRe.MatchString(r.Ticker):
+		return fmt.Errorf("%q is not a ticker (use * for the whole watchlist)", r.Ticker)
+	case r.Action != "BUY" && r.Action != "WATCH":
 		return errors.New("action must be BUY or WATCH")
+	case r.Thesis == "":
+		return errors.New("a rule needs a thesis tag")
 	}
 	if _, err := parseCondition(r.Condition); err != nil {
 		return err
@@ -255,8 +269,18 @@ example: suspt rule add golden-cross '*' WATCH trend "sma50 crosses_above sma200
 		r.Name, r.Version, r.Ticker, r.Action, r.Thesis, r.Condition, nyToday()); err != nil {
 		return err
 	}
-	fmt.Printf("rule %s v%d: %s %s when %s\n", r.Name, r.Version, r.Action, r.Ticker, r.Condition)
 	return tx.Commit()
+}
+
+func retireRule(db *sql.DB, name string) error {
+	res, err := db.Exec(`UPDATE rules SET retired_on = ? WHERE name = ? AND retired_on IS NULL`, nyToday(), name)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("no active rule %q", name)
+	}
+	return nil
 }
 
 func runRules(db *sql.DB, args []string) error {
@@ -311,13 +335,30 @@ func runWatch(db *sql.DB, args []string) error {
 	if len(args) == 0 {
 		return runWatchlist(db)
 	}
-	for _, t := range args {
-		if _, err := db.Exec(`INSERT OR IGNORE INTO watchlist (ticker, added_on) VALUES (?, ?)`, strings.ToUpper(t), nyToday()); err != nil {
-			return err
-		}
+	n, err := addWatch(db, args)
+	if err != nil {
+		return err
 	}
-	fmt.Println("added; run `suspt update` to fetch data")
+	fmt.Printf("%d added; run `suspt update` to fetch data\n", n)
 	return nil
+}
+
+// addWatch adds tickers to the watchlist and returns how many were new.
+func addWatch(db *sql.DB, tickers []string) (int, error) {
+	added := 0
+	for _, t := range tickers {
+		t = strings.ToUpper(strings.TrimSpace(t))
+		if !tickerRe.MatchString(t) {
+			return added, fmt.Errorf("%q is not a ticker", t)
+		}
+		res, err := db.Exec(`INSERT OR IGNORE INTO watchlist (ticker, added_on) VALUES (?, ?)`, t, nyToday())
+		if err != nil {
+			return added, err
+		}
+		n, _ := res.RowsAffected()
+		added += int(n)
+	}
+	return added, nil
 }
 
 func runUnwatch(db *sql.DB, args []string) error {
@@ -339,10 +380,25 @@ func runLevel(db *sql.DB, args []string) error {
 		return err
 	}
 	p, err := strconv.ParseFloat(args[2], 64)
-	if err != nil || p <= 0 {
+	if err != nil {
 		return fmt.Errorf("price must be a positive number")
 	}
-	_, err = db.Exec(`INSERT OR REPLACE INTO levels (ticker, name, price) VALUES (?, ?, ?)`, t, args[1], p)
+	return setLevel(db, t, args[1], p)
+}
+
+var levelNameRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,30}$`)
+
+// setLevel stores a key level; its name is usable in rules as level:NAME.
+func setLevel(db *sql.DB, ticker, name string, price float64) error {
+	switch {
+	case !tickerRe.MatchString(ticker):
+		return fmt.Errorf("%q is not a ticker", ticker)
+	case !levelNameRe.MatchString(name):
+		return errors.New("level name: letters, digits, - or _, e.g. support")
+	case !(price > 0) || math.IsInf(price, 0):
+		return errors.New("price must be a positive number")
+	}
+	_, err := db.Exec(`INSERT OR REPLACE INTO levels (ticker, name, price) VALUES (?, ?, ?)`, ticker, name, price)
 	return err
 }
 
@@ -534,6 +590,23 @@ func runWatchlist(db *sql.DB) error {
 
 // runUpdate is the daily routine: fetch, screen, replay, report.
 func runUpdate(db *sql.DB) error {
+	if err := refresh(db, nil); err != nil {
+		return err
+	}
+	if err := screenReport(db, nil, true); err != nil {
+		return err
+	}
+	fmt.Println()
+	if err := runPortfolio(db); err != nil {
+		return err
+	}
+	fmt.Println()
+	return runSignals(db)
+}
+
+// refresh fetches watchlist, holdings and benchmark data, refreshes SPUS membership,
+// screens every company and replays the account. The CLI and the app's refresh share it.
+func refresh(db *sql.DB, step func(i, n int, ticker string)) error {
 	set, err := loadSettings(db)
 	if err != nil {
 		return err
@@ -555,22 +628,29 @@ func runUpdate(db *sql.DB) error {
 	if len(tickers) > 45 {
 		log.Printf("warning: %d tickers; Tiingo's free tier allows 50 requests per hour", len(tickers))
 	}
-	if err := runIngest(db, tickers); err != nil {
+	if err := ingestAll(db, tickers, step); errors.Is(err, errNoKeys) {
+		return err
+	} else if err != nil {
 		log.Print(err) // keep going with whatever data we have
 	}
 	if _, err := syncSPUS(db); err != nil {
 		log.Printf("SPUS membership not refreshed: %v", err) // keep the previous list
 	}
-	if err := screenReport(db, nil, true); err != nil {
+	rs, err := db.Query(`SELECT ticker FROM companies`)
+	if err != nil {
 		return err
 	}
-	if err := replay(db); err != nil {
-		return err
+	var companies []string
+	for rs.Next() {
+		var t string
+		rs.Scan(&t)
+		companies = append(companies, t)
 	}
-	fmt.Println()
-	if err := runPortfolio(db); err != nil {
-		return err
+	rs.Close()
+	for _, t := range companies {
+		if _, err := screenTicker(db, t); err != nil {
+			log.Printf("%s screen: %v", t, err)
+		}
 	}
-	fmt.Println()
-	return runSignals(db)
+	return replay(db)
 }

@@ -10,7 +10,9 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os/exec"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"syscall"
@@ -236,34 +238,49 @@ func securityHeaders(h http.Handler) http.Handler {
 	})
 }
 
-func newServer(db *sql.DB) http.Handler {
+func newServer(a *app) http.Handler {
+	db := a.db
 	mux := http.NewServeMux()
 	static, _ := fs.Sub(webFS, "web")
 	mux.Handle("GET /", http.FileServerFS(static))
+	reply := func(w http.ResponseWriter, r *http.Request, v any, err error, failStatus int) {
+		if errors.Is(err, errNoTicker) {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		} else if err != nil {
+			log.Printf("%s %s: %v", r.Method, r.URL.Path, err)
+			http.Error(w, err.Error(), failStatus)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		if err := json.NewEncoder(w).Encode(v); err != nil {
+			log.Printf("%s: encode: %v", r.URL.Path, err)
+		}
+	}
 	api := func(path string, fn func(*http.Request) (any, error)) {
 		mux.HandleFunc("GET "+path, func(w http.ResponseWriter, r *http.Request) {
 			v, err := fn(r)
-			if errors.Is(err, errNoTicker) {
-				http.Error(w, err.Error(), http.StatusNotFound)
-				return
-			} else if err != nil {
-				log.Printf("%s: %v", r.URL.Path, err)
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			w.Header().Set("Content-Type", "application/json")
-			w.Header().Set("Cache-Control", "no-store")
-			if err := json.NewEncoder(w).Encode(v); err != nil {
-				log.Printf("%s: encode: %v", r.URL.Path, err)
-			}
+			reply(w, r, v, err, http.StatusInternalServerError)
 		})
 	}
+	// Actions answer 400 with a message meant for the person using the app.
+	act := func(pattern string, fn func(*http.Request) (any, error)) {
+		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+			v, err := fn(r)
+			reply(w, r, v, err, http.StatusBadRequest)
+		})
+	}
+	ok := func(err error) (any, error) { return map[string]bool{"ok": err == nil}, err }
+
 	api("/api/summary", func(*http.Request) (any, error) { return portfolioSummary(db) })
 	api("/api/watchlist", func(*http.Request) (any, error) { return watchlistRows(db) })
 	api("/api/journal", func(*http.Request) (any, error) { return journalReport(db) })
 	api("/api/signals", func(*http.Request) (any, error) { return currentSignals(db) })
 	api("/api/orders", func(*http.Request) (any, error) { return ordersJSON(db) })
 	api("/api/screens", func(*http.Request) (any, error) { return latestScreens(db) })
+	api("/api/settings", func(*http.Request) (any, error) { return a.settingsJSON() })
+	api("/api/status", func(*http.Request) (any, error) { return a.status(), nil })
 	api("/api/rules", func(*http.Request) (any, error) {
 		r, err := loadRules(db, true)
 		if r == nil {
@@ -278,28 +295,119 @@ func newServer(db *sql.DB) http.Handler {
 		}
 		return loadTickerDetail(db, t)
 	})
-	return securityHeaders(mux)
+
+	act("POST /api/orders", a.postOrder)
+	act("POST /api/orders/{id}/cancel", func(r *http.Request) (any, error) { return ok(cancelOrder(db, r.PathValue("id"))) })
+	act("POST /api/watchlist", func(r *http.Request) (any, error) {
+		var in struct{ Tickers []string }
+		if err := decode(r, &in); err != nil {
+			return nil, err
+		}
+		n, err := addWatch(db, in.Tickers)
+		return map[string]int{"added": n}, err
+	})
+	act("DELETE /api/watchlist/{t}", func(r *http.Request) (any, error) {
+		_, err := db.Exec(`DELETE FROM watchlist WHERE ticker = ?`, strings.ToUpper(r.PathValue("t")))
+		return ok(err)
+	})
+	act("POST /api/levels", func(r *http.Request) (any, error) {
+		var in struct {
+			Ticker, Name string
+			Price        float64
+		}
+		if err := decode(r, &in); err != nil {
+			return nil, err
+		}
+		return ok(setLevel(db, strings.ToUpper(in.Ticker), in.Name, in.Price))
+	})
+	act("DELETE /api/levels/{t}/{name}", func(r *http.Request) (any, error) {
+		_, err := db.Exec(`DELETE FROM levels WHERE ticker = ? AND name = ?`, strings.ToUpper(r.PathValue("t")), r.PathValue("name"))
+		return ok(err)
+	})
+	act("POST /api/rules", func(r *http.Request) (any, error) {
+		var in struct{ Name, Ticker, Action, Thesis, Condition string }
+		if err := decode(r, &in); err != nil {
+			return nil, err
+		}
+		ru := rule{Name: in.Name, Ticker: in.Ticker, Action: in.Action, Thesis: in.Thesis, Condition: in.Condition}
+		err := addRule(db, &ru)
+		return map[string]int{"version": ru.Version}, err
+	})
+	act("DELETE /api/rules/{name}", func(r *http.Request) (any, error) { return ok(retireRule(db, r.PathValue("name"))) })
+	act("POST /api/reviews", func(r *http.Request) (any, error) {
+		var in struct {
+			Ticker, Verdict, Note string
+			Percent               float64
+		}
+		if err := decode(r, &in); err != nil {
+			return nil, err
+		}
+		return ok(setReview(db, in.Ticker, in.Verdict, in.Percent, in.Note))
+	})
+	act("POST /api/settings", func(r *http.Request) (any, error) {
+		var in struct{ Key, Value string }
+		if err := decode(r, &in); err != nil {
+			return nil, err
+		}
+		return ok(setSetting(db, in.Key, in.Value))
+	})
+	act("POST /api/setup", a.postSetup)
+	act("POST /api/refresh", func(*http.Request) (any, error) { return ok(a.startRefresh("manual")) })
+	act("POST /api/sync-spus", func(*http.Request) (any, error) {
+		members, err := syncSPUS(db)
+		if err != nil {
+			return nil, err
+		}
+		n, err := addWatch(db, members)
+		return map[string]int{"members": len(members), "added": n}, err
+	})
+	return securityHeaders(guard(mux))
 }
 
-func runServe(db *sql.DB, args []string) error {
+// runServe starts the app. Without a login it only listens on this machine. When open
+// is set (plain `suspt`), it opens the browser, or just the browser if already running.
+func runServe(db *sql.DB, dbPath string, args []string, open bool) error {
 	addr := "127.0.0.1:8484"
 	if len(args) > 0 {
 		addr = args[0]
 	}
-	if host, _, err := net.SplitHostPort(addr); err != nil {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
 		return err
-	} else if ip := net.ParseIP(host); host != "localhost" && (ip == nil || !ip.IsLoopback()) {
-		log.Printf("warning: %s is reachable from other machines and the dashboard has no login", addr)
+	}
+	if ip := net.ParseIP(host); host != "localhost" && (ip == nil || !ip.IsLoopback()) {
+		return fmt.Errorf("%s would expose the app to other machines, and it has no login yet; use 127.0.0.1", addr)
+	}
+	url := "http://" + addr
+	ln, err := net.Listen("tcp", addr)
+	if errors.Is(err, syscall.EADDRINUSE) && open {
+		log.Printf("suspt is already running; opening %s", url)
+		return openBrowser(url)
+	} else if errors.Is(err, syscall.EADDRINUSE) {
+		return fmt.Errorf("%s is already in use: the app is probably already running (open %s), or pass another address: suspt serve 127.0.0.1:8485", addr, url)
+	} else if err != nil {
+		return err
 	}
 	if err := replay(db); err != nil {
 		log.Printf("replay: %v", err)
 	}
-	ln, err := net.Listen("tcp", addr)
-	if errors.Is(err, syscall.EADDRINUSE) {
-		return fmt.Errorf("%s is already in use: the dashboard is probably already running (open http://%s), or pass another address: suspt serve 127.0.0.1:8485", addr, addr)
-	} else if err != nil {
-		return err
+	a := &app{db: db, dbPath: dbPath}
+	go a.autoRefresh()
+	log.Printf("suspt is running at %s (keep this window open; close it to stop)", url)
+	if open {
+		if err := openBrowser(url); err != nil {
+			log.Printf("open your browser at %s", url)
+		}
 	}
-	log.Printf("dashboard: http://%s", addr)
-	return http.Serve(ln, newServer(db))
+	return http.Serve(ln, newServer(a))
+}
+
+func openBrowser(url string) error {
+	switch runtime.GOOS {
+	case "darwin":
+		return exec.Command("open", url).Start()
+	case "linux":
+		return exec.Command("xdg-open", url).Start()
+	}
+	return errors.New("unsupported OS")
 }

@@ -2,7 +2,16 @@
 <img width="3024" height="638" alt="image" src="https://github.com/user-attachments/assets/c456a81f-116e-4204-90d1-5c20085110d0" />
 
 A Sharia-compliant US stock tracker. Simulation only: no brokerage, no real orders. Made for learning purposes only.
-One Go binary, one SQLite file, a CLI for every change and a read-only dashboard.
+One Go binary, one SQLite file: a web app for everything, plus a CLI for terminal users.
+
+## Getting started (no terminal needed)
+
+1. Install Go once from https://go.dev/dl/ (the app builds itself with it).
+2. Download this repo (green **Code** button, **Download ZIP**) and unzip it.
+3. Double-click `Suspt.command`. The first time, macOS may block it because it was downloaded: right-click it, choose **Open**, then **Open** again. It builds the app and opens it in your browser.
+4. Follow **getting started** on the first page: connect the free data sources (a Tiingo account plus your name and email for the SEC), pick stocks, and place your first paper trade.
+
+Keep the small window that opens: closing it stops the app. While it's open, new prices arrive by themselves after each US market close.
 
 ## Decisions
 
@@ -14,7 +23,7 @@ One Go binary, one SQLite file, a CLI for every change and a read-only dashboard
 | Prices | Tiingo free tier (50 req/hour, 1000/day, 500 symbols/month, personal use only) |
 | Fundamentals | SEC EDGAR companyfacts + submissions (10 req/s max, User-Agent required) |
 
-## Setup
+## Terminal setup
 
 ```sh
 cp .env.example .env            # fill in TIINGO_API_KEY and SEC_USER_AGENT; suspt reads ./.env itself
@@ -57,9 +66,13 @@ go test ./...
 
 Rules are explicit clauses joined by `and`: terms `open high low close chg smaN level:NAME` or numbers, operators `< <= > >= crosses_above crosses_below`. Editing a rule adds a new version and retires the old one (`suspt rules -all`). Indicators use split-adjusted prices. A BUY signal on a stock that is not COMPLIANT shows as BLOCKED.
 
-## Dashboard
+## The app
 
-`suspt serve` binds to 127.0.0.1 only, serves read-only JSON plus embedded static files (no CDN, strict CSP). Styled after getinsomnia.app: navy, monospace, serif numbers, numbered views, keyboard footer. Keys: `1` to `6` views, `j/k` move, `/` filter, `h` rule hits, `r` reload, `?` help. Charts use TradingView Lightweight Charts 4.2.3 (Apache-2.0), vendored in `web/vendor` after checking the npm integrity hash.
+`suspt` (or `Suspt.command`) starts the app on 127.0.0.1 and opens the browser; `suspt serve` starts it without opening one. Everything the CLI does is in the app: trades with a required reason and thesis, watchlist, key levels, rules, business verdicts, settings and API-key setup. Trades from the app and the CLI go through the same validation.
+
+- **Background refresh.** While the app is open it refreshes after each US close (`auto_refresh`), and the top-right button shows progress, including waits for Tiingo's hourly limit. Only one refresh runs at a time, app or terminal.
+- **Local only.** It refuses to listen on anything but loopback (no login yet). Requests must be addressed to localhost (blocks DNS rebinding), and every change needs an `X-Suspt` header that other websites can't send without a CORS preflight the server never approves. API keys are written to `.env` (mode 0600) and never sent back to the browser.
+- **Look.** Styled after getinsomnia.app: navy, monospace, serif numbers, numbered views, keyboard footer. Keys: `1` to `7` views, `j/k` move, `b` buy, `/` filter, `h` rule hits, `?` help. Charts use TradingView Lightweight Charts 4.2.3 (Apache-2.0), vendored in `web/vendor` after checking the npm integrity hash.
 
 ## Sharia screen
 

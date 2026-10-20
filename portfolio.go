@@ -16,21 +16,22 @@ import (
 )
 
 var settingDefaults = []struct{ Key, Default, Help string }{
-	{"start_date", "", "first day of the simulation (default: latest trading day at first run)"},
-	{"initial_deposit", "300", "USD deposited on start_date"},
-	{"monthly_deposit", "50", "USD deposited every month after the start month"},
-	{"deposit_day", "1", "day of month for the monthly deposit (lands on the next trading day)"},
-	{"fee_flat", "0", "USD per order"},
-	{"fee_pct", "0", "percent of order value"},
-	{"fee_min", "0", "minimum USD per order"},
-	{"dividend_withholding", "0", "percent of dividends withheld as tax"},
-	{"compliance_sell", "sell", "sell | alert: what happens when a held stock turns non-compliant"},
-	{"compliance_grace_days", "0", "calendar days to wait before the compliance sell"},
-	{"benchmark", "SPUS", "benchmark ETF; gets the same deposits on the same dates"},
-	{"allowed_etfs", "SPUS,HLAL", "sharia ETFs that can be bought without a stock screen"},
-	{"max_position_pct", "20", "flag a position above this share of holdings"},
-	{"max_sector_pct", "35", "flag a sector above this share of holdings"},
-	{"max_semis_pct", "25", "flag semiconductors above this share of holdings"},
+	{"start_date", "", "the day your practice account opens; changing it replays everything from that day"},
+	{"initial_deposit", "300", "pretend cash you start with, in dollars"},
+	{"monthly_deposit", "50", "pretend cash added every month, in dollars"},
+	{"deposit_day", "1", "day of the month the deposit arrives (moves to the next trading day)"},
+	{"fee_flat", "0", "broker fee charged on every order, in dollars"},
+	{"fee_pct", "0", "broker fee as a percent of the order's value"},
+	{"fee_min", "0", "smallest fee charged on any order, in dollars"},
+	{"dividend_withholding", "0", "US tax taken from dividends before you receive them, in percent"},
+	{"compliance_sell", "sell", "sell (automatically) or alert (only warn): what happens when a stock you hold fails the sharia screen"},
+	{"auto_refresh", "on", "on or off: fetch new prices after each US market close while the app is open"},
+	{"compliance_grace_days", "0", "days to wait before that automatic sale"},
+	{"benchmark", "SPUS", "the fund your results are compared with; it gets the same deposits on the same dates"},
+	{"allowed_etfs", "SPUS,HLAL", "sharia funds you may buy even though funds aren't screened like single stocks (comma-separated)"},
+	{"max_position_pct", "20", "warn when one stock is more than this percent of what you hold"},
+	{"max_sector_pct", "35", "warn when one sector is more than this percent of what you hold"},
+	{"max_semis_pct", "25", "warn when semiconductor stocks are more than this percent of what you hold"},
 }
 
 type settings map[string]string
@@ -79,10 +80,15 @@ func runConfig(db *sql.DB, args []string) error {
 	if len(args) != 2 {
 		return errors.New("usage: suspt config [KEY VALUE]")
 	}
-	key, val := args[0], strings.TrimSpace(args[1])
+	return setSetting(db, args[0], args[1])
+}
+
+// setSetting validates and stores one setting, then replays the account.
+func setSetting(db *sql.DB, key, val string) error {
+	val = strings.TrimSpace(val)
 	i := slices.IndexFunc(settingDefaults, func(d struct{ Key, Default, Help string }) bool { return d.Key == key })
 	if i < 0 {
-		return fmt.Errorf("unknown setting %q (run `suspt config` to list)", key)
+		return fmt.Errorf("unknown setting %q", key)
 	}
 	switch key {
 	case "start_date":
@@ -92,6 +98,10 @@ func runConfig(db *sql.DB, args []string) error {
 	case "compliance_sell":
 		if val != "sell" && val != "alert" {
 			return fmt.Errorf("compliance_sell must be sell or alert")
+		}
+	case "auto_refresh":
+		if val != "on" && val != "off" {
+			return fmt.Errorf("auto_refresh must be on or off")
 		}
 	case "benchmark", "allowed_etfs":
 		val = strings.ToUpper(val)
@@ -641,7 +651,7 @@ func replay(db *sql.DB) error {
 		return err
 	}
 	if len(cal) == 0 {
-		return fmt.Errorf("no prices for benchmark %s: run `suspt ingest %s`", bench, bench)
+		return fmt.Errorf("no prices for the benchmark %s yet: add it to the watchlist and refresh data", bench)
 	}
 	if set["start_date"] == "" {
 		set["start_date"] = cal[len(cal)-1].Date
@@ -747,10 +757,7 @@ func runOrder(db *sql.DB, side string, args []string) error {
 	if len(pos) < 1 || len(pos) > 2 {
 		return usage
 	}
-	o := order{Ticker: strings.ToUpper(pos[0]), Side: side, GTC: *gtc, Reason: strings.TrimSpace(*reason), Thesis: strings.ToLower(strings.TrimSpace(*thesis))}
-	if o.Reason == "" || o.Thesis == "" {
-		return errors.New("every trade needs -reason and -thesis")
-	}
+	o := order{Ticker: pos[0], Side: side, GTC: *gtc, Reason: *reason, Thesis: *thesis}
 	if len(pos) == 2 && pos[1] != "all" {
 		q, err := strconv.ParseFloat(pos[1], 64)
 		if err != nil || q <= 0 {
@@ -761,20 +768,40 @@ func runOrder(db *sql.DB, side string, args []string) error {
 	if *usd > 0 {
 		o.Notional = sql.NullFloat64{Float64: *usd, Valid: true}
 	}
-	switch {
-	case o.Qty.Valid && o.Notional.Valid:
-		return errors.New("give a quantity or -usd, not both")
-	case side == "buy" && !o.Qty.Valid && !o.Notional.Valid:
-		return usage
-	case side == "sell" && len(pos) == 1 && !o.Notional.Valid:
+	if side == "sell" && len(pos) == 1 && !o.Notional.Valid {
 		return usage
 	}
-	if *limit < 0 {
-		return errors.New("limit must be positive")
-	} else if *limit > 0 {
+	if *limit != 0 {
 		o.Limit = sql.NullFloat64{Float64: *limit, Valid: true}
 	}
+	if err := placeOrder(db, &o); err != nil {
+		return err
+	}
+	fmt.Printf("order #%d: %s %s %s, %s, fills on a trading day after %s\n", o.ID, side, o.Ticker, o.size(), o.kind(), o.PlacedOn)
+	return nil
+}
 
+// placeOrder validates an order, records it for a later trading day and replays.
+// The CLI and the web app both go through here.
+func placeOrder(db *sql.DB, o *order) error {
+	o.Ticker = strings.ToUpper(strings.TrimSpace(o.Ticker))
+	o.Reason, o.Thesis = strings.TrimSpace(o.Reason), strings.ToLower(strings.TrimSpace(o.Thesis))
+	switch {
+	case o.Side != "buy" && o.Side != "sell":
+		return errors.New("side must be buy or sell")
+	case !tickerRe.MatchString(o.Ticker):
+		return fmt.Errorf("%q is not a ticker", o.Ticker)
+	case o.Reason == "" || o.Thesis == "":
+		return errors.New("every trade needs a reason and a thesis tag")
+	case o.Qty.Valid && o.Notional.Valid:
+		return errors.New("give a number of shares or a dollar amount, not both")
+	case o.Side == "buy" && !o.Qty.Valid && !o.Notional.Valid:
+		return errors.New("a buy needs a number of shares or a dollar amount")
+	case o.Qty.Valid && !(o.Qty.Float64 > 0), o.Notional.Valid && !(o.Notional.Float64 > 0):
+		return errors.New("the size must be a positive number")
+	case o.Limit.Valid && !(o.Limit.Float64 > 0):
+		return errors.New("the limit price must be a positive number")
+	}
 	set, err := loadSettings(db)
 	if err != nil {
 		return err
@@ -783,8 +810,9 @@ func runOrder(db *sql.DB, side string, args []string) error {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM prices WHERE ticker = ?`, o.Ticker).Scan(&n); err != nil {
 		return err
 	} else if n == 0 {
-		return fmt.Errorf("no prices for %s: run `suspt ingest %s` first", o.Ticker, o.Ticker)
+		return fmt.Errorf("no prices for %s yet: add it to the watchlist and refresh data first", o.Ticker)
 	}
+	side := o.Side
 	if side == "buy" && !slices.Contains(set.etfs(), o.Ticker) {
 		if status, note := latestStatus(db, o.Ticker, true); status != "COMPLIANT" {
 			if cur, _ := latestStatus(db, o.Ticker, false); cur == "COMPLIANT" {
@@ -800,7 +828,6 @@ func runOrder(db *sql.DB, side string, args []string) error {
 		return err
 	}
 	o.ID, _ = res.LastInsertId()
-	fmt.Printf("order #%d: %s %s %s, %s, fills on a trading day after %s\n", o.ID, side, o.Ticker, o.size(), o.kind(), o.PlacedOn)
 	return replay(db)
 }
 
@@ -808,14 +835,21 @@ func runCancel(db *sql.DB, args []string) error {
 	if len(args) != 1 {
 		return errors.New("usage: suspt cancel ORDER_ID")
 	}
-	res, err := db.Exec(`UPDATE orders SET cancelled_on = ? WHERE id = ? AND cancelled_on IS NULL AND status = 'open'`, nyToday(), args[0])
+	if err := cancelOrder(db, args[0]); err != nil {
+		return err
+	}
+	fmt.Printf("order #%s cancelled from %s (fills on or before that day stand)\n", args[0], nyToday())
+	return nil
+}
+
+func cancelOrder(db *sql.DB, id string) error {
+	res, err := db.Exec(`UPDATE orders SET cancelled_on = ? WHERE id = ? AND cancelled_on IS NULL AND status = 'open'`, nyToday(), id)
 	if err != nil {
 		return err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		return fmt.Errorf("order %s is not open", args[0])
+		return fmt.Errorf("order %s is not open", id)
 	}
-	fmt.Printf("order #%s cancelled from %s (fills on or before that day stand)\n", args[0], nyToday())
 	return replay(db)
 }
 
