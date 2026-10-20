@@ -177,8 +177,12 @@ async function viewWatchlist(main, ticker) {
   if (ticker) {
     const i = rows.findIndex((r) => r.ticker === ticker);
     if (i >= 0) state.sel = i;
+  } else if (!rows[state.sel]?.date) {
+    state.sel = Math.max(0, rows.findIndex((r) => r.date)); // start on a ticker that has data
   }
+  const pending = rows.filter((r) => !r.date).length;
   main.innerHTML = `${label('01', 'watchlist')}
+    ${pending ? `<p class="fine">${pending} of ${rows.length} tickers are still waiting for prices. <span class="cmd">suspt update</span> fetches them; Tiingo's free tier allows 50 requests an hour, so a large watchlist fills in over a few hours.</p>` : ''}
     <div class="split">
       <div class="list"><input id="filter" placeholder="/ filter" aria-label="Filter watchlist" value="${esc(state.filter)}"><ul id="wl" role="listbox" aria-label="Watchlist"></ul></div>
       <section id="detail" aria-live="polite"></section>
@@ -197,7 +201,9 @@ function drawList() {
   const rows = visibleRows();
   state.sel = Math.min(state.sel, Math.max(0, rows.length - 1));
   $('#wl').innerHTML = rows.map((r, i) => `<li><button role="option" aria-selected="${i === state.sel}" data-i="${i}">
-      <span class="t">${esc(r.ticker)}</span><span class="px">${money(r.close)}</span><span class="chg ${dir(r.change)}">${pct(r.change, 2)}</span>
+      <span class="t">${esc(r.ticker)}</span>${r.date
+        ? `<span class="px">${money(r.close)}</span><span class="chg ${dir(r.change)}">${pct(r.change, 2)}</span>`
+        : '<span class="px muted">waiting</span><span></span>'}
       <span class="meta">${badge(r.status)}<span>${esc(r.sector)}${r.held ? ' · held' : ''}${r.signals.map((s) => ` · ${s.blocked ? 'blocked' : s.action.toLowerCase()} ${esc(s.rule)}`).join('')}</span></span>
     </button></li>`).join('') || `<li class="empty" style="padding:12px">no match</li>`;
   $('#wl').querySelectorAll('button').forEach((b) => (b.onclick = () => { state.sel = +b.dataset.i; drawList(); showTicker(); }));
@@ -219,8 +225,16 @@ async function showTicker() {
   if (!row) { $('#detail').innerHTML = ''; return; }
   history.replaceState(null, '', `#watchlist/${row.ticker}`);
   $('#path').textContent = `~/watchlist/${row.ticker.toLowerCase()}`;
-  const d = await get(`/api/ticker/${encodeURIComponent(row.ticker)}`);
   clearCharts();
+  let d;
+  try {
+    d = await get(`/api/ticker/${encodeURIComponent(row.ticker)}`);
+  } catch (e) {
+    $('#detail').innerHTML = `<div class="detail-head"><h1>${esc(row.ticker)}</h1>${badge(row.status)}</div>` + (row.date
+      ? `<p class="flag">${esc(e.message)}</p>`
+      : empty(`No prices yet. <span class="cmd">suspt update</span> will fetch them; with Tiingo's 50 requests an hour that can take a while for a big watchlist. Press <kbd>r</kbd> to check again.`));
+    return;
+  }
   const last = d.screens[d.screens.length - 1];
   const months = d.screens.filter((s) => s.status !== 'NO_DATA');
   const ok = months.filter((s) => s.status === 'COMPLIANT').length;

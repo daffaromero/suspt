@@ -5,6 +5,7 @@ import (
 	"embed"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log"
 	"net"
@@ -12,6 +13,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"syscall"
 )
 
 //go:embed web
@@ -292,6 +294,12 @@ func runServe(db *sql.DB, args []string) error {
 	if err := replay(db); err != nil {
 		log.Printf("replay: %v", err)
 	}
+	ln, err := net.Listen("tcp", addr)
+	if errors.Is(err, syscall.EADDRINUSE) {
+		return fmt.Errorf("%s is already in use: the dashboard is probably already running (open http://%s), or pass another address: suspt serve 127.0.0.1:8485", addr, addr)
+	} else if err != nil {
+		return err
+	}
 	log.Printf("dashboard: http://%s", addr)
-	return http.ListenAndServe(addr, newServer(db))
+	return http.Serve(ln, newServer(db))
 }

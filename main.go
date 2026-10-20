@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	_ "time/tzdata" // order dates use New York time on any machine
@@ -157,7 +158,9 @@ func openDB(path string) (*sql.DB, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", path)
+	// WAL lets the dashboard read while an update writes; busy_timeout waits out short
+	// write locks instead of failing with "database is locked".
+	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)")
 	if err != nil {
 		return nil, err
 	}
@@ -179,6 +182,21 @@ func mustEnv(name string) string {
 		log.Fatalf("%s is not set: add it to .env in this folder (see .env.example)", name)
 	}
 	return v
+}
+
+// lockFetches lets only one ingest/update run at a time: two would split the hourly
+// Tiingo budget and fetch the same tickers twice. The OS drops the lock if the process
+// dies. ponytail: flock is Unix-only; use a lock row in the DB if Windows ever matters.
+func lockFetches(dbPath string) (func(), error) {
+	f, err := os.OpenFile(dbPath+".lock", os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		f.Close()
+		return nil, errors.New("another `suspt update` or `suspt ingest` is already running; let it finish (or stop it) and try again")
+	}
+	return func() { f.Close() }, nil
 }
 
 // loadDotEnv sets KEY=VALUE pairs from path that the environment doesn't already define.
@@ -220,6 +238,14 @@ func main() {
 	defer db.Close()
 
 	args := os.Args[2:]
+	if os.Args[1] == "ingest" || os.Args[1] == "update" {
+		unlock, err := lockFetches(dbPath)
+		if err != nil {
+			log.Print(err)
+			os.Exit(1)
+		}
+		defer unlock()
+	}
 	switch os.Args[1] {
 	case "ingest":
 		err = runIngest(db, args)
@@ -311,10 +337,16 @@ func runIngest(db *sql.DB, tickers []string) error {
 		} else if err != nil {
 			log.Printf("%s edgar: %v", t, err)
 			failed++
-		} else if n == 0 {
-			log.Printf("%s edgar: no new filing", t)
 		} else {
-			log.Printf("%s edgar: %d facts", t, n)
+			if n == 0 {
+				log.Printf("%s edgar: no new filing", t)
+			} else {
+				log.Printf("%s edgar: %d facts", t, n)
+			}
+			// Screen right away so a long, rate-limited run fills the dashboard progressively.
+			if _, err := screenTicker(db, t); err != nil {
+				log.Printf("%s screen: %v", t, err)
+			}
 		}
 	}
 	if failed > 0 {
