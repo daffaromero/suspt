@@ -1255,6 +1255,16 @@ state.navigated = true; // opening the page counts as following a link
 window.addEventListener('hashchange', () => { state.navigated = true; route(); });
 setInterval(tick, 1000);
 tick();
+// The first time this browser opens suspt, pick a level once and remember it: someone who
+// already follows stocks has used the app before and starts at intermediate.
+async function firstLevel() {
+  if (store.get('suspt-level')) return;
+  const st = await get('/api/status').catch(() => null);
+  if (!st) return; // try again next time
+  level = st.watching > 0 ? 2 : 1;
+  store.set('suspt-level', LEVELS[level - 1]);
+}
+
 setMode(mode);
-route();
+firstLevel().then(route);
 pollStatus();
